@@ -1,138 +1,138 @@
-"""PDF 텍스트 추출: 스캔 점수 분기 → 회전·deskew → 프리셋 OCR → 품질 게이트 → 레이아웃."""
+"""PDF 텍스트 추출: 디지털 직접 추출 우선, 스캔본은 최소 전처리 OCR."""
 
+import asyncio
 import json
-from typing import Generator
+from typing import AsyncGenerator
 
 import fitz
+import cv2
 import numpy as np
 from PIL import Image
 import pytesseract
 
 from services.scan_detect import compute_scan_score, PAGE_DIRECT
-from services.orientation import correct_orientation, hough_deskew
-from services.preprocess import to_grayscale, crop_document_region, preprocess_for_ocr, PRESET_A
-from services.layout import detect_regions, REGION_TABLE
-from services.table_ocr import extract_table_text
-from services.quality_gate import ocr_with_retry, OcrAttempt
 
 pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
-TEXT_PSM = "--psm 6 --oem 3"
+LANG = "kor+eng"
+PSM_BLOCK = "--psm 6 --oem 3"
+PSM_AUTO = "--psm 3 --oem 3"
 
 
-def _ocr_page(page: fitz.Page, lang: str) -> dict:
-    """스캔본 특화 파이프라인: 렌더→crop→회전→deskew→전처리→품질게이트→레이아웃."""
-    pix = page.get_pixmap(dpi=300, alpha=False)
-    rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+def _render_page(page: fitz.Page, dpi: int = 300) -> np.ndarray:
+    """페이지를 RGB numpy array로 렌더링."""
+    pix = page.get_pixmap(dpi=dpi, alpha=False)
+    return np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
 
-    gray = to_grayscale(rgb)
-    cropped = crop_document_region(gray)
-    oriented, rotated_deg = correct_orientation(cropped)
-    deskewed, deskew_angle = hough_deskew(oriented)
 
-    binary_a = preprocess_for_ocr(deskewed, preset=PRESET_A)
-    regions = detect_regions(binary_a, lang=lang)
+def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, float, str]:
+    """최소 전처리 OCR: 원본 → 실패 시 grayscale+Otsu 순으로 시도."""
+    pil_img = Image.fromarray(rgb)
 
-    parts: list[str] = []
-    page_conf_list: list[float] = []
+    text, conf, psm = _try_ocr(pil_img, lang, PSM_BLOCK)
+    if conf >= 50 and len(text.strip()) > 5:
+        return text, conf, psm
 
-    if not regions:
-        attempt = ocr_with_retry(
-            binary_a, lang=lang,
-            preprocess_fn=lambda p: preprocess_for_ocr(deskewed, preset=p),
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    pil_binary = Image.fromarray(binary)
+
+    text2, conf2, psm2 = _try_ocr(pil_binary, lang, PSM_BLOCK)
+    if conf2 > conf:
+        return text2, conf2, psm2
+
+    text3, conf3, psm3 = _try_ocr(pil_binary, lang, PSM_AUTO)
+    if conf3 > conf and conf3 > conf2:
+        return text3, conf3, psm3
+
+    return text, conf, psm
+
+
+def _try_ocr(pil_img: Image.Image, lang: str, psm: str) -> tuple[str, float, str]:
+    """image_to_data로 텍스트 + confidence를 한번에 추출."""
+    try:
+        data = pytesseract.image_to_data(
+            pil_img, lang=lang, config=psm,
+            output_type=pytesseract.Output.DICT,
         )
-        parts.append(attempt.text.strip())
-        page_conf_list.append(attempt.avg_conf)
-        return _build_meta(parts, page_conf_list, attempt, rotated_deg, deskew_angle)
+    except Exception:
+        return "", 0.0, psm
 
-    best_attempt: OcrAttempt | None = None
-    for region in regions:
-        crop = binary_a[region.y:region.y + region.h, region.x:region.x + region.w]
-        if crop.size == 0:
+    lines: dict[tuple[int, int, int], list[str]] = {}
+    conf_values: list[int] = []
+
+    for i in range(len(data["text"])):
+        c = int(data["conf"][i])
+        txt = data["text"][i]
+        if c <= 0 or not txt.strip():
             continue
-        if region.kind == REGION_TABLE:
-            text = extract_table_text(crop, lang=lang)
-            page_conf_list.append(0)
+        conf_values.append(c)
+        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        lines.setdefault(key, []).append(txt)
+
+    text = "\n".join(" ".join(words) for _, words in sorted(lines.items()))
+    avg_conf = float(np.mean(conf_values)) if conf_values else 0.0
+
+    return text, round(avg_conf, 1), psm
+
+
+def _process_page_sync(page: fitz.Page, idx: int, total: int, lang: str) -> tuple[str, str, str]:
+    """단일 페이지 처리 후 (NDJSON 줄, 텍스트, 메서드) 반환."""
+    try:
+        score = compute_scan_score(page)
+
+        if score.decision == PAGE_DIRECT:
+            text = page.get_text("text").strip()
+            method = "direct"
+            avg_conf = 100.0
+            psm_used = "n/a"
         else:
-            attempt = ocr_with_retry(
-                crop, lang=lang,
-                preprocess_fn=lambda p, g=deskewed, r=region: preprocess_for_ocr(
-                    g[r.y:r.y + r.h, r.x:r.x + r.w], preset=p,
-                ),
-            )
-            text = attempt.text
-            page_conf_list.append(attempt.avg_conf)
-            if best_attempt is None or attempt.avg_conf > best_attempt.avg_conf:
-                best_attempt = attempt
-        if text.strip():
-            parts.append(text.strip())
+            rgb = _render_page(page, dpi=300)
+            text, avg_conf, psm_used = _simple_ocr(rgb, lang)
+            method = "ocr"
 
-    meta_attempt = best_attempt or OcrAttempt("", 0.0, TEXT_PSM, PRESET_A)
-    return _build_meta(parts, page_conf_list, meta_attempt, rotated_deg, deskew_angle)
+        ndjson = json.dumps({
+            "page": idx + 1,
+            "total": total,
+            "method": method,
+            "avg_conf": avg_conf,
+            "psm_used": psm_used,
+            "scan_score": {
+                "words": score.word_count,
+                "text_area": round(score.text_area_ratio, 4),
+                "img_area": round(score.image_area_ratio, 4),
+            },
+        }) + "\n"
+        return ndjson, text, method
+
+    except Exception as err:
+        ndjson = json.dumps({
+            "page": idx + 1,
+            "total": total,
+            "method": "error",
+            "error": str(err)[:200],
+        }) + "\n"
+        return ndjson, "", "error"
 
 
-def _build_meta(parts: list[str], confs: list[float], attempt: OcrAttempt, rotated_deg: int, deskew_angle: float) -> dict:
-    avg_conf = round(sum(confs) / max(len(confs), 1), 1)
-    return {
-        "text": "\n\n".join(p for p in parts if p),
-        "avg_conf": avg_conf,
-        "psm_used": attempt.psm_used,
-        "preset_used": attempt.preset_used,
-        "rotated_deg": rotated_deg,
-        "deskew_angle": deskew_angle,
-    }
-
-
-def extract_text_stream(pdf_bytes: bytes, lang: str = "kor+eng") -> Generator[str, None, None]:
-    """페이지별 스캔 점수 분기 → 직접 추출 or OCR → NDJSON 스트리밍."""
+async def extract_text_stream(pdf_bytes: bytes, lang: str = LANG) -> AsyncGenerator[str, None]:
+    """페이지별 NDJSON 스트리밍. 각 yield 후 event loop에 제어 넘겨 즉시 전송."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     total = len(doc)
     all_parts: list[str] = []
     all_methods: list[str] = []
 
     try:
-        for idx, page in enumerate(doc):
-            try:
-                score = compute_scan_score(page)
+        for idx in range(total):
+            page = doc[idx]
+            ndjson_line, text, method = _process_page_sync(page, idx, total, lang)
 
-                if score.decision == PAGE_DIRECT:
-                    text = page.get_text("text").strip()
-                    method = "direct"
-                    meta = {
-                        "avg_conf": 100, "psm_used": "n/a",
-                        "preset_used": "n/a", "rotated_deg": 0, "deskew_angle": 0,
-                    }
-                else:
-                    result = _ocr_page(page, lang)
-                    text = result["text"]
-                    method = "ocr"
-                    meta = {k: result[k] for k in ("avg_conf", "psm_used", "preset_used", "rotated_deg", "deskew_angle")}
+            if text:
+                all_parts.append(text)
+            all_methods.append(f"p{idx + 1}:{method}")
 
-                if text:
-                    all_parts.append(text)
-                method_label = f"p{idx + 1}:{method}"
-                all_methods.append(method_label)
-
-                yield json.dumps({
-                    "page": idx + 1,
-                    "total": total,
-                    "method": method,
-                    "scan_score": {
-                        "words": score.word_count,
-                        "text_area": score.text_area_ratio,
-                        "img_area": score.image_area_ratio,
-                    },
-                    **meta,
-                }) + "\n"
-
-            except Exception as page_err:
-                all_methods.append(f"p{idx + 1}:error")
-                yield json.dumps({
-                    "page": idx + 1,
-                    "total": total,
-                    "method": "error",
-                    "error": str(page_err)[:200],
-                }) + "\n"
+            yield ndjson_line
+            await asyncio.sleep(0)
 
     finally:
         doc.close()

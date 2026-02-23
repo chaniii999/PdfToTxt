@@ -71,9 +71,14 @@ def to_grayscale(img: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
 
+def binarize(gray: np.ndarray, preset: str = PRESET_A) -> np.ndarray:
+    """이미 crop된 grayscale 이미지에 프리셋별 이진화만 수행."""
+    fn = PRESET_MAP.get(preset, _preset_a)
+    return fn(gray)
+
+
 def preprocess_for_ocr(rgb_array: np.ndarray, preset: str = PRESET_A) -> np.ndarray:
-    """전처리 파이프라인: 그레이스케일 → 외곽 제거 → 프리셋별 이진화."""
+    """전체 파이프라인(최초 입력용): 그레이스케일 → 외곽 제거 → 프리셋별 이진화."""
     gray = to_grayscale(rgb_array)
     cropped = crop_document_region(gray)
-    fn = PRESET_MAP.get(preset, _preset_a)
-    return fn(cropped)
+    return binarize(cropped, preset)

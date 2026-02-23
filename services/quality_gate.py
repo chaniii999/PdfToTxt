@@ -7,7 +7,7 @@ import numpy as np
 import pytesseract
 from PIL import Image
 
-from services.preprocess import PRESET_A, PRESET_B, PRESET_C
+from services.preprocess import PRESET_A, PRESET_B
 
 MIN_AVG_CONF = 55
 MIN_KOREAN_RATIO = 0.10
@@ -33,6 +33,21 @@ class OcrAttempt:
     korean_ratio: float = 0.0
     abnormal_ratio: float = 0.0
     passed: bool = False
+
+
+def _reconstruct_text(data: dict) -> str:
+    """image_to_data 결과에서 block/par/line 구조를 살려 텍스트 복원."""
+    lines: dict[tuple[int, int, int], list[str]] = {}
+    for i in range(len(data["text"])):
+        if int(data["conf"][i]) <= 0 or not data["text"][i].strip():
+            continue
+        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        lines.setdefault(key, []).append(data["text"][i])
+
+    return "\n".join(
+        " ".join(words)
+        for _, words in sorted(lines.items())
+    )
 
 
 def evaluate_quality(text: str, conf_list: list[int]) -> tuple[float, float, float]:
@@ -81,15 +96,8 @@ def ocr_with_retry(
                 pil_img, lang=lang, config=psm, output_type=pytesseract.Output.DICT,
             )
 
-            text_parts = []
-            conf_list = []
-            for txt, conf in zip(data["text"], data["conf"]):
-                c = int(conf)
-                conf_list.append(c)
-                if c > 0 and txt.strip():
-                    text_parts.append(txt)
-
-            text = " ".join(text_parts)
+            text = _reconstruct_text(data)
+            conf_list = [int(c) for c in data["conf"]]
             avg_conf, kr, abnormal = evaluate_quality(text, conf_list)
 
             attempt = OcrAttempt(
