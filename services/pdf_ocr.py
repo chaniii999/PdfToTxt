@@ -25,55 +25,35 @@ def _render_page(page: fitz.Page, dpi: int = 300) -> np.ndarray:
     return np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
 
 
-def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, float, str]:
-    """최소 전처리 OCR: 원본 → 실패 시 grayscale+Otsu 순으로 시도."""
-    pil_img = Image.fromarray(rgb)
+def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, str]:
+    """최소 전처리 OCR: 원본 → 실패 시 grayscale+Otsu. Tesseract 호출 최소화."""
+    pil_rgb = Image.fromarray(rgb)
 
-    text, conf, psm = _try_ocr(pil_img, lang, PSM_BLOCK)
-    if conf >= 50 and len(text.strip()) > 5:
-        return text, conf, psm
+    text1 = _ocr_string(pil_rgb, lang, PSM_BLOCK)
+    if len(text1.strip()) > 20:
+        return text1, PSM_BLOCK
 
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    pil_binary = Image.fromarray(binary)
+    pil_bin = Image.fromarray(binary)
 
-    text2, conf2, psm2 = _try_ocr(pil_binary, lang, PSM_BLOCK)
-    if conf2 > conf:
-        return text2, conf2, psm2
+    text2 = _ocr_string(pil_bin, lang, PSM_BLOCK)
+    if len(text2.strip()) > len(text1.strip()):
+        return text2, PSM_BLOCK
 
-    text3, conf3, psm3 = _try_ocr(pil_binary, lang, PSM_AUTO)
-    if conf3 > conf and conf3 > conf2:
-        return text3, conf3, psm3
+    text3 = _ocr_string(pil_bin, lang, PSM_AUTO)
+    if len(text3.strip()) > len(text1.strip()) and len(text3.strip()) > len(text2.strip()):
+        return text3, PSM_AUTO
 
-    return text, conf, psm
+    return text1, PSM_BLOCK
 
 
-def _try_ocr(pil_img: Image.Image, lang: str, psm: str) -> tuple[str, float, str]:
-    """image_to_data로 텍스트 + confidence를 한번에 추출."""
+def _ocr_string(pil_img: Image.Image, lang: str, psm: str) -> str:
+    """image_to_string 단일 호출. Tesseract가 자체 단어 그룹핑 유지."""
     try:
-        data = pytesseract.image_to_data(
-            pil_img, lang=lang, config=psm,
-            output_type=pytesseract.Output.DICT,
-        )
+        return pytesseract.image_to_string(pil_img, lang=lang, config=psm).strip()
     except Exception:
-        return "", 0.0, psm
-
-    lines: dict[tuple[int, int, int], list[str]] = {}
-    conf_values: list[int] = []
-
-    for i in range(len(data["text"])):
-        c = int(data["conf"][i])
-        txt = data["text"][i]
-        if c <= 0 or not txt.strip():
-            continue
-        conf_values.append(c)
-        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
-        lines.setdefault(key, []).append(txt)
-
-    text = "\n".join(" ".join(words) for _, words in sorted(lines.items()))
-    avg_conf = float(np.mean(conf_values)) if conf_values else 0.0
-
-    return text, round(avg_conf, 1), psm
+        return ""
 
 
 def _process_page_sync(page: fitz.Page, idx: int, total: int, lang: str) -> tuple[str, str, str]:
@@ -84,18 +64,16 @@ def _process_page_sync(page: fitz.Page, idx: int, total: int, lang: str) -> tupl
         if score.decision == PAGE_DIRECT:
             text = page.get_text("text").strip()
             method = "direct"
-            avg_conf = 100.0
             psm_used = "n/a"
         else:
             rgb = _render_page(page, dpi=300)
-            text, avg_conf, psm_used = _simple_ocr(rgb, lang)
+            text, psm_used = _simple_ocr(rgb, lang)
             method = "ocr"
 
         ndjson = json.dumps({
             "page": idx + 1,
             "total": total,
             "method": method,
-            "avg_conf": avg_conf,
             "psm_used": psm_used,
             "scan_score": {
                 "words": score.word_count,
