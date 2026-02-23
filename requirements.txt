@@ -1,0 +1,27 @@
+# PdfToTxt — 의회문서 PDF→OCR→LLM 요약 파이프라인
+
+# === API 서버 ===
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# === PDF · 이미지 ===
+# PDF → 페이지별 이미지 변환 (Poppler 불필요, Windows 친화적)
+pymupdf>=1.23.0
+# 이미지 처리 및 OCR 전처리
+Pillow>=10.2.0
+
+# === OCR (Tesseract) ===
+# Tesseract 엔진은 OS별 별도 설치 필요 (설치 후 PATH 또는 설정으로 경로 지정)
+pytesseract>=0.3.10
+
+# === 설정 · 환경 ===
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# === LLM 요약 (API 호출) ===
+httpx>=0.26.0
+openai>=1.12.0
+
+# === 기타 ===
+# 비동기/타입 등 (FastAPI가 의존하는 pydantic은 fastapi에 포함)
+# 테스트 시 필요 시: pytest, pytest-asyncio
