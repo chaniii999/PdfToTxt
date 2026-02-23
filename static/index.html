@@ -79,7 +79,7 @@
     function updateProgress(page, total, method) {
       var pct = Math.round((page / total) * 100);
       progressFill.style.width = pct + '%';
-      var methodLabel = method === 'direct' ? '직접 추출' : 'OCR';
+      var methodLabel = method === 'direct' ? '직접 추출' : method === 'error' ? '오류(건너뜀)' : 'OCR';
       progressLabel.textContent = page + ' / ' + total + ' 페이지 (' + methodLabel + ') — ' + pct + '%';
     }
 
@@ -128,6 +128,8 @@
               resultText.textContent = data.text || '(텍스트 없음)';
               methodInfo.textContent = data.methods ? '추출 방식: ' + data.methods.join(', ') : '';
               resultSection.hidden = false;
+            } else if (data.error) {
+              updateProgress(data.page, data.total, 'error');
             } else {
               updateProgress(data.page, data.total, data.method);
             }
