@@ -11,6 +11,7 @@ from PIL import Image
 import pytesseract
 
 from services.scan_detect import compute_scan_score, PAGE_DIRECT
+from services.postprocess import correct_ocr_text
 
 pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
@@ -68,6 +69,7 @@ def _process_page_sync(page: fitz.Page, idx: int, total: int, lang: str) -> tupl
         else:
             rgb = _render_page(page, dpi=300)
             text, psm_used = _simple_ocr(rgb, lang)
+            text = correct_ocr_text(text)
             method = "ocr"
 
         ndjson = json.dumps({
