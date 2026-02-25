@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from routers import ocr
+from api import ocr
 
 app = FastAPI()
 app.include_router(ocr.router)

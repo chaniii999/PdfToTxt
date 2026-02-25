@@ -10,8 +10,8 @@ import numpy as np
 from PIL import Image
 import pytesseract
 
-from services.scan_detect import compute_scan_score, PAGE_DIRECT
-from services.postprocess import correct_ocr_text
+from services.ocr.scan_detect import compute_scan_score, PAGE_DIRECT
+from services.ocr.postprocess import correct_ocr_text
 
 pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 

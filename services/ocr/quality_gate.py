@@ -7,7 +7,7 @@ import numpy as np
 import pytesseract
 from PIL import Image
 
-from services.preprocess import PRESET_A, PRESET_B
+from services.ocr.preprocess import PRESET_A, PRESET_B
 
 MIN_AVG_CONF = 55
 MIN_KOREAN_RATIO = 0.10

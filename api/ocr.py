@@ -3,7 +3,7 @@
 from fastapi import APIRouter, File, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
 
-from services.pdf_ocr import extract_text_stream
+from services.ocr.pdf_ocr import extract_text_stream
 
 router = APIRouter(prefix="/ocr", tags=["ocr"])
 
