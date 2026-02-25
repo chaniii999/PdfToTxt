@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 import pytesseract
 
+from services.ocr.preprocess import PRESET_A, preprocess_for_ocr
 from services.ocr.scan_detect import compute_scan_score, PAGE_DIRECT
 from services.ocr.postprocess import correct_ocr_text
 
@@ -27,7 +28,7 @@ def _render_page(page: fitz.Page, dpi: int = 300) -> np.ndarray:
 
 
 def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, str]:
-    """최소 전처리 OCR: 원본 → 실패 시 grayscale+Otsu. Tesseract 호출 최소화."""
+    """최소 전처리 OCR: 원본 → Otsu → preprocess 프리셋 A → PSM 자동. Tesseract 호출 최소화."""
     pil_rgb = Image.fromarray(rgb)
 
     text1 = _ocr_string(pil_rgb, lang, PSM_BLOCK)
@@ -42,11 +43,21 @@ def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, str]:
     if len(text2.strip()) > len(text1.strip()):
         return text2, PSM_BLOCK
 
-    text3 = _ocr_string(pil_bin, lang, PSM_AUTO)
+    try:
+        preprocessed = preprocess_for_ocr(rgb, PRESET_A)
+        pil_prep = Image.fromarray(preprocessed)
+        text3 = _ocr_string(pil_prep, lang, PSM_BLOCK)
+    except Exception:
+        text3 = ""
     if len(text3.strip()) > len(text1.strip()) and len(text3.strip()) > len(text2.strip()):
-        return text3, PSM_AUTO
+        return text3, f"{PSM_BLOCK}+presetA"
 
-    return text1, PSM_BLOCK
+    text4 = _ocr_string(pil_bin, lang, PSM_AUTO)
+    if len(text4.strip()) > len(text1.strip()) and len(text4.strip()) > len(text2.strip()) and len(text4.strip()) > len(text3.strip()):
+        return text4, PSM_AUTO
+
+    best = max([(text1, PSM_BLOCK), (text2, PSM_BLOCK), (text3, f"{PSM_BLOCK}+presetA"), (text4, PSM_AUTO)], key=lambda x: len(x[0].strip()))
+    return best[0], best[1]
 
 
 def _ocr_string(pil_img: Image.Image, lang: str, psm: str) -> str:

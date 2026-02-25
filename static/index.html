@@ -22,9 +22,24 @@
     .h-16 { height: 1rem; }
     .result-header { display: flex; justify-content: space-between; align-items: center; }
     .result-title { font-weight: bold; }
-    .result-text { white-space: pre-wrap; word-break: break-all; padding: 1rem; background: #f5f5f5; border-radius: 4px; min-height: 120px; max-height: 500px; overflow-y: auto; }
+    .result-text { white-space: pre-wrap; word-break: break-all; padding: 1rem; background: #f5f5f5; border-radius: 4px; min-height: 120px; max-height: 500px; overflow-y: auto; font-size: 1rem; }
+    .result-header-left { display: flex; align-items: center; gap: 1rem; }
+    .accuracy-result { padding: 0.25rem 0.5rem; background: #f0f8ff; border-radius: 4px; font-size: 0.85rem; }
     .method-info { font-size: 0.85rem; color: #666; }
     .error { color: #c00; }
+    .compare-section { display: flex; flex-direction: column; gap: 0.5rem; }
+    .compare-label { font-size: 0.9rem; font-weight: 500; }
+    .compare-textarea { min-height: 80px; padding: 0.5rem; font-family: inherit; font-size: 0.9rem; resize: vertical; border: 1px solid #ccc; border-radius: 4px; }
+    .accuracy-result .row { margin-bottom: 0.1rem; }
+    .accuracy-result .row:last-child { margin-bottom: 0; }
+    .diff-col { display: inline-flex; flex-direction: column; vertical-align: top; font-size: 1em; background: #fff5f5; border-radius: 2px; }
+    .diff-original-line { font-size: 1em; color: #c00; line-height: 1.3; padding: 0 2px; background: #e8f5e9; border-radius: 2px 2px 0 0; }
+    .diff-extracted-line { line-height: 1.3; font-size: 1em; }
+    .diff-extracted-line.diff-wrong { background: #ffcccc; border-radius: 2px; }
+    .diff-extracted-line.diff-ins { background: #ffe0b2; border-radius: 2px; }
+    .diff-del-wrap { font-size: 1em; background: #f5f0fa; }
+    .diff-del-wrap .diff-original-line { color: #6a1b9a; background: #e8f5e9; border-radius: 2px 2px 0 0; }
+    .diff-del-wrap .diff-extracted-line { background: #e1bee7; color: #6a1b9a; }
   </style>
 </head>
 <body>
@@ -54,13 +69,25 @@
 
   <div id="resultSection" hidden>
     <div class="result-header">
-      <div class="result-title">추출 결과</div>
+      <div class="result-header-left">
+        <div class="result-title">추출 결과</div>
+        <div id="accuracyResult" class="accuracy-result" hidden></div>
+      </div>
+      <button type="button" id="diffToggleBtn" style="font-size:0.8rem;padding:0.25rem 0.6rem;display:none;">diff 끄기</button>
+      <button type="button" id="diffCopyBtn" style="font-size:0.8rem;padding:0.25rem 0.6rem;display:none;">diff 복사</button>
       <button type="button" id="copyBtn" style="font-size:0.8rem;padding:0.25rem 0.6rem;">복사하기</button>
     </div>
     <div class="h-4"></div>
     <div class="method-info" id="methodInfo"></div>
     <div class="h-6"></div>
     <pre class="result-text" id="resultText"></pre>
+
+    <div class="h-16"></div>
+    <div class="compare-section">
+      <label class="compare-label">원본 텍스트 (비교용)</label>
+      <textarea id="originalInput" class="compare-textarea" placeholder="원본 PDF 내용을 붙여넣으세요"></textarea>
+      <button type="button" id="compareBtn">정확도 비교</button>
+    </div>
   </div>
   <div class="error" id="errorEl" role="alert"></div>
 
@@ -78,6 +105,9 @@
 
     var startTime = 0;
     var timerInterval = null;
+    var rawExtractedText = '';
+    var cachedDiffHtml = '';
+    var cachedCompareData = null;
 
     function formatMMSS(ms) {
       var totalSec = Math.floor(ms / 1000);
@@ -186,8 +216,14 @@
               progressFill.style.width = '100%';
               progressLabel.textContent = '완료!';
               progressTime.textContent = '작업 완료 ' + formatMMSS(totalElapsed);
-              resultText.textContent = data.text || '(텍스트 없음)';
+              rawExtractedText = data.text || '(텍스트 없음)';
+              resultText.textContent = rawExtractedText;
               methodInfo.textContent = data.methods ? '추출 방식: ' + data.methods.join(', ') : '';
+              document.getElementById('accuracyResult').hidden = true;
+              cachedDiffHtml = '';
+              cachedCompareData = null;
+              document.getElementById('diffToggleBtn').style.display = 'none';
+              document.getElementById('diffCopyBtn').style.display = 'none';
               resultSection.hidden = false;
             } else if (data.error) {
               updateProgress(data.page, data.total, 'error');
@@ -205,7 +241,7 @@
     }
 
     function handleCopyBtnClick() {
-      var text = resultText.textContent;
+      var text = rawExtractedText || resultText.textContent;
       navigator.clipboard.writeText(text).then(function () {
         var btn = document.getElementById('copyBtn');
         btn.textContent = '복사됨!';
@@ -213,9 +249,209 @@
       });
     }
 
+    function levenshtein(s1, s2) {
+      if (s1.length < s2.length) return levenshtein(s2, s1);
+      if (s2.length === 0) return s1.length;
+      var prev = [];
+      for (var j = 0; j <= s2.length; j++) prev[j] = j;
+      for (var i = 0; i < s1.length; i++) {
+        var curr = [i + 1];
+        for (var j = 0; j < s2.length; j++) {
+          curr.push(Math.min(
+            prev[j + 1] + 1,
+            curr[j] + 1,
+            prev[j] + (s1[i] === s2[j] ? 0 : 1)
+          ));
+        }
+        prev = curr;
+      }
+      return prev[s2.length];
+    }
+
+    function extractKorean(text) {
+      return text.match(/[\uac00-\ud7a3\u1100-\u11ff\u3130-\u318f]/g) || [];
+    }
+
+    function extractEnglish(text) {
+      return text.match(/[a-zA-Z]/g) || [];
+    }
+
+    function accuracyPercent(gt, ocr) {
+      if (gt.length === 0) return 100;
+      var edits = levenshtein(gt, ocr);
+      var correct = Math.max(0, gt.length - edits);
+      return Math.round(correct / gt.length * 1000) / 10;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function isWhitespace(c) {
+      return /[\s\u00a0]/.test(c);
+    }
+
+    function computeDiffOps(original, extracted) {
+      var m = original.length;
+      var n = extracted.length;
+      var dp = [];
+      for (var i = 0; i <= m; i++) {
+        dp[i] = [];
+        for (var j = 0; j <= n; j++) {
+          if (i === 0) dp[i][j] = j;
+          else if (j === 0) dp[i][j] = i;
+          else {
+            var a = original[i - 1], b = extracted[j - 1];
+            var cost = (a === b || (isWhitespace(a) && isWhitespace(b))) ? 0 : 1;
+            dp[i][j] = Math.min(
+              dp[i - 1][j - 1] + cost,
+              dp[i][j - 1] + 1,
+              dp[i - 1][j] + 1
+            );
+          }
+        }
+      }
+      var ops = [];
+      var i = m, j = n;
+      while (i > 0 || j > 0) {
+        var a = i > 0 ? original[i - 1] : '', b = j > 0 ? extracted[j - 1] : '';
+        var same = (a === b || (isWhitespace(a) && isWhitespace(b)));
+        if (i > 0 && j > 0 && same && dp[i][j] === dp[i - 1][j - 1]) {
+          ops.unshift({ type: 'm', gt: a, ocr: b });
+          i--; j--;
+        } else if (i > 0 && j > 0 && dp[i][j] === dp[i - 1][j - 1] + 1) {
+          ops.unshift({ type: 's', gt: a, ocr: b });
+          i--; j--;
+        } else if (j > 0 && dp[i][j] === dp[i][j - 1] + 1) {
+          ops.unshift({ type: 'i', gt: '', ocr: b });
+          j--;
+        } else {
+          ops.unshift({ type: 'd', gt: a, ocr: '' });
+          i--;
+        }
+      }
+      return ops;
+    }
+
+    function buildDiffHtml(original, extracted) {
+      var ops = computeDiffOps(original, extracted);
+      var html = '';
+      for (var k = 0; k < ops.length; k++) {
+        var op = ops[k];
+        if (op.type === 'm') {
+          html += escapeHtml(op.ocr);
+        } else if (op.type === 's') {
+          html += '<span class="diff-col"><span class="diff-original-line">' + escapeHtml(op.gt) + '</span><span class="diff-extracted-line diff-wrong">' + escapeHtml(op.ocr) + '</span></span>';
+        } else if (op.type === 'i') {
+          html += '<span class="diff-extracted-line diff-ins">' + escapeHtml(op.ocr) + '</span>';
+        } else if (op.type === 'd') {
+          html += '<span class="diff-col diff-del-wrap"><span class="diff-original-line">' + escapeHtml(op.gt) + '</span><span class="diff-extracted-line">·</span></span>';
+        }
+      }
+      return html;
+    }
+
+    function handleCompareBtnClick() {
+      var original = document.getElementById('originalInput').value;
+      var extracted = rawExtractedText || resultText.textContent || '';
+
+      if (!original.trim()) {
+        errorEl.textContent = '원본 텍스트를 입력하세요.';
+        return;
+      }
+
+      var gtKr = extractKorean(original).join('');
+      var ocrKr = extractKorean(extracted).join('');
+      var gtEn = extractEnglish(original).join('');
+      var ocrEn = extractEnglish(extracted).join('');
+
+      var accEl = document.getElementById('accuracyResult');
+      accEl.hidden = false;
+      clearError();
+
+      var lines = [];
+      var accLines = [];
+      if (gtKr.length > 0) {
+        var krAcc = accuracyPercent(gtKr, ocrKr);
+        lines.push('<div class="row">한글: ' + krAcc + '% (원본 ' + gtKr.length + '자 → 추출 ' + ocrKr.length + '자)</div>');
+        accLines.push('한글: ' + krAcc + '% (원본 ' + gtKr.length + '자 → 추출 ' + ocrKr.length + '자)');
+      } else {
+        lines.push('<div class="row">한글: 원본에 한글 없음 (N/A)</div>');
+        accLines.push('한글: 원본에 한글 없음 (N/A)');
+      }
+      if (gtEn.length > 0) {
+        var enAcc = accuracyPercent(gtEn, ocrEn);
+        lines.push('<div class="row">영어: ' + enAcc + '% (원본 ' + gtEn.length + '자 → 추출 ' + ocrEn.length + '자)</div>');
+        accLines.push('영어: ' + enAcc + '% (원본 ' + gtEn.length + '자 → 추출 ' + ocrEn.length + '자)');
+      } else {
+        lines.push('<div class="row">영어: 원본에 영어 없음 (N/A)</div>');
+        accLines.push('영어: 원본에 영어 없음 (N/A)');
+      }
+
+      accEl.innerHTML = '<strong>OCR 인식률</strong><div class="h-4"></div>' + lines.join('');
+
+      cachedDiffHtml = buildDiffHtml(original, extracted);
+      cachedCompareData = {
+        original: original,
+        extracted: extracted,
+        accuracyLines: accLines
+      };
+      resultText.innerHTML = cachedDiffHtml;
+      var toggleBtn = document.getElementById('diffToggleBtn');
+      var diffCopyBtn = document.getElementById('diffCopyBtn');
+      toggleBtn.style.display = '';
+      toggleBtn.textContent = 'diff 끄기';
+      diffCopyBtn.style.display = '';
+    }
+
+    function buildDiffCopyText() {
+      if (!cachedCompareData) return '';
+      var d = cachedCompareData;
+      var lines = [
+        '=== OCR 비교 데이터 (AI 보완용) ===',
+        '',
+        '[원본]',
+        d.original,
+        '',
+        '[추출]',
+        d.extracted,
+        '',
+        '[OCR 인식률]',
+        d.accuracyLines.join('\n'),
+        '',
+        '---'
+      ];
+      return lines.join('\n');
+    }
+
+    function handleDiffCopyClick() {
+      var text = buildDiffCopyText();
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(function () {
+        var btn = document.getElementById('diffCopyBtn');
+        btn.textContent = '복사됨!';
+        setTimeout(function () { btn.textContent = 'diff 복사'; }, 1500);
+      });
+    }
+
+    function handleDiffToggleClick() {
+      var toggleBtn = document.getElementById('diffToggleBtn');
+      if (!cachedDiffHtml) return;
+      if (toggleBtn.textContent === 'diff 끄기') {
+        resultText.textContent = rawExtractedText;
+        toggleBtn.textContent = 'diff 보기';
+      } else {
+        resultText.innerHTML = cachedDiffHtml;
+        toggleBtn.textContent = 'diff 끄기';
+      }
+    }
+
     fileInput.addEventListener('change', handleFileChange);
     uploadBtn.addEventListener('click', handleUploadClick);
     document.getElementById('copyBtn').addEventListener('click', handleCopyBtnClick);
+    document.getElementById('compareBtn').addEventListener('click', handleCompareBtnClick);
+    document.getElementById('diffToggleBtn').addEventListener('click', handleDiffToggleClick);
+    document.getElementById('diffCopyBtn').addEventListener('click', handleDiffCopyClick);
   </script>
 </body>
 </html>
