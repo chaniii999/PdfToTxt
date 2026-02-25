@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-02-25 | 미사용 코드 정리
+
+- **삭제**: `lang_split.py`, `layout.py`, `table_ocr.py`, `quality_gate.py`, `postprocess.py`
+- **이유**: pdf_ocr 파이프라인에서 미참조. 코드베이스 단순화
+
+---
+
+## 2026-02-25 | 인식률 개선 집중 — 후처리 제거, 전처리·PSM 확장
+
+- **후처리 제거**: `correct_ocr_text` 호출 제거. 인식률 개선에 집중
+- **DPI 350**: 300 → 350. 소형 글자 인식 개선
+- **PSM 확장**: PSM 4(단일 열), PSM 3(자동) 추가 후보
+- **전처리 확장**: preset B, C 추가. enhance + preset A/B/C 모두 시도 후 최고 점수 선택
+- **조기 종료**: 점수 450 초과 시 추가 시도 생략
+
+---
+
 ## 2026-02-25 | OCR 품질 개선 (기술 지시서 반영)
 
 - **tessdata_best 검증**: `tessdata_check.py` 추가. kor 10MB+, eng 4.5MB+ 확인. 미달 시 경고 로그 + NDJSON `tessdata_ok`/`tessdata_msg` 반환
@@ -177,7 +194,7 @@
 - [ ] 2차 시도: grayscale + Otsu 이진화 (1차 결과가 부족할 때만)
 - [ ] 텍스트 추출은 `image_to_string` 사용 (`image_to_data`는 한글 띄어쓰기 깨짐)
 - [ ] OCR 언어는 `kor+eng` + `tessdata_best` 조합 사용 (영문 포함 문서 기준)
-- [ ] OCR 결과에 후처리(`postprocess.py`) 적용 — 영문 약어 오인식 치환
+- [ ] 후처리 미사용 (인식률 우선 전략)
 - [ ] Tesseract 호출에는 반드시 `try/except` 적용
 
 ### 프론트/API

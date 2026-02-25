@@ -11,9 +11,8 @@ import numpy as np
 from PIL import Image
 import pytesseract
 
-from services.ocr.preprocess import PRESET_A, enhance_for_ocr, preprocess_for_ocr
+from services.ocr.preprocess import PRESET_A, PRESET_B, PRESET_C, enhance_for_ocr, preprocess_for_ocr
 from services.ocr.scan_detect import compute_scan_score, PAGE_DIRECT
-from services.ocr.postprocess import correct_ocr_text
 from services.ocr.orientation import deskew_rgb
 from services.ocr.tessdata_check import verify_tessdata_best
 
@@ -21,6 +20,7 @@ pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
 LANG = "kor+eng"
 PSM_BLOCK = "--psm 6 --oem 3"
+PSM_COLUMN = "--psm 4 --oem 3"
 PSM_AUTO = "--psm 3 --oem 3"
 
 # 영문 핵심어 보존 가산점용 키워드
@@ -31,7 +31,7 @@ ENGLISH_KEYWORDS = frozenset({
 })
 
 
-def _render_page(page: fitz.Page, dpi: int = 300) -> np.ndarray:
+def _render_page(page: fitz.Page, dpi: int = 350) -> np.ndarray:
     """페이지를 RGB numpy array로 렌더링."""
     pix = page.get_pixmap(dpi=dpi, alpha=False)
     return np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
@@ -64,44 +64,39 @@ def _score_candidate(text: str) -> float:
 
 
 def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, str]:
-    """최소 전처리 OCR: 원본 → Otsu → (부족 시) enhance 또는 preset A → PSM 자동. 최대 4회 호출."""
+    """다중 전처리·PSM 후보 중 최고 점수 선택. 인식률 우선."""
     pil_rgb = Image.fromarray(rgb)
-    text1 = _ocr_string(pil_rgb, lang, PSM_BLOCK)
-
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     pil_bin = Image.fromarray(binary)
-    text2 = _ocr_string(pil_bin, lang, PSM_BLOCK)
 
-    candidates: list[tuple[str, str]] = [(text1, PSM_BLOCK), (text2, PSM_BLOCK)]
-    best_so_far = max(candidates, key=lambda x: _score_candidate(x[0]))
-
-    if _score_candidate(best_so_far[0]) > 350:
-        return best_so_far[0], best_so_far[1]
+    candidates: list[tuple[str, str]] = [
+        (_ocr_string(pil_rgb, lang, PSM_BLOCK), "rgb+psm6"),
+        (_ocr_string(pil_bin, lang, PSM_BLOCK), "otsu+psm6"),
+        (_ocr_string(pil_bin, lang, PSM_COLUMN), "otsu+psm4"),
+        (_ocr_string(pil_bin, lang, PSM_AUTO), "otsu+psm3"),
+    ]
+    best = max(candidates, key=lambda x: _score_candidate(x[0]))
+    if _score_candidate(best[0]) > 450:
+        return best[0], best[1]
 
     try:
         enhanced = enhance_for_ocr(rgb)
-        text3 = _ocr_string(Image.fromarray(enhanced), lang, PSM_BLOCK)
-        candidates.append((text3, f"{PSM_BLOCK}+enhance"))
+        t = _ocr_string(Image.fromarray(enhanced), lang, PSM_BLOCK)
+        if _score_candidate(t) > _score_candidate(best[0]):
+            best = (t, "enhance+psm6")
     except Exception:
-        text3 = ""
-    if text3 and _score_candidate(text3) > _score_candidate(best_so_far[0]):
-        best_so_far = (text3, f"{PSM_BLOCK}+enhance")
+        pass
+    for preset in (PRESET_A, PRESET_B, PRESET_C):
+        try:
+            preprocessed = preprocess_for_ocr(rgb, preset)
+            t = _ocr_string(Image.fromarray(preprocessed), lang, PSM_BLOCK)
+            if _score_candidate(t) > _score_candidate(best[0]):
+                best = (t, f"preset{preset}+psm6")
+        except Exception:
+            pass
 
-    try:
-        preprocessed = preprocess_for_ocr(rgb, PRESET_A)
-        text4 = _ocr_string(Image.fromarray(preprocessed), lang, PSM_BLOCK)
-        candidates.append((text4, f"{PSM_BLOCK}+presetA"))
-    except Exception:
-        text4 = ""
-    if text4 and _score_candidate(text4) > _score_candidate(best_so_far[0]):
-        best_so_far = (text4, f"{PSM_BLOCK}+presetA")
-
-    text5 = _ocr_string(pil_bin, lang, PSM_AUTO)
-    if _score_candidate(text5) > _score_candidate(best_so_far[0]):
-        best_so_far = (text5, PSM_AUTO)
-
-    return best_so_far[0], best_so_far[1]
+    return best[0], best[1]
 
 
 def _ocr_string(pil_img: Image.Image, lang: str, psm: str) -> str:
@@ -125,7 +120,6 @@ def _process_page_sync(page: fitz.Page, idx: int, total: int, lang: str) -> tupl
             rgb = _render_page(page)
             rgb = deskew_rgb(rgb)
             text, psm_used = _simple_ocr(rgb, lang)
-            text = correct_ocr_text(text)
             method = "ocr"
 
         ndjson = json.dumps({

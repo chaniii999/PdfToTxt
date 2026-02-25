@@ -21,7 +21,7 @@ PDF 업로드
     ↓
 scan_detect: 디지털 vs 스캔 판별
     ├─ PAGE_DIRECT → page.get_text("text") (직접 추출)
-    └─ PAGE_OCR → _simple_ocr → correct_ocr_text
+    └─ PAGE_OCR → _simple_ocr (후처리 없음, 인식률 우선)
 ```
 
 ### 2.1 스캔 판별 (scan_detect.py)
@@ -45,12 +45,6 @@ scan_detect: 디지털 vs 스캔 판별
 - **조기 종료**: 점수 > 350이면 추가 시도 생략
 - **최대 호출**: 5회 (실제로는 2~5회)
 
-### 2.3 후처리 (postprocess.py)
-
-- 고정 치환: `ALLM→LLM`, `A|→AI`, `LL M→LLM` 등
-- 정규식: `\bL\s*L\s*M\b` → `LLM` 등
-- 한글 사이 파이프 제거: `한|글` → `한글`
-
 ---
 
 ## 3. 주요 설정값
@@ -72,18 +66,9 @@ services/ocr/
 ├── pdf_ocr.py       # 메인 파이프라인, _simple_ocr, extract_text_stream
 ├── scan_detect.py   # 디지털/스캔 판별
 ├── preprocess.py   # 전처리 (sharpen, CLAHE, preset A/B/C)
-├── postprocess.py  # 후처리 치환 (영문 약어, 괄호 안 오인식)
 ├── orientation.py  # Deskew (Hough), pdf_ocr 전단 적용
-├── tessdata_check.py # tessdata_best 검증
-├── lang_split.py   # [비활성화] 한글/영어 분리 처리
-├── layout.py       # 표/텍스트 영역 감지 (현재 pdf_ocr에서 미사용)
-├── table_ocr.py    # 표 OCR (현재 pdf_ocr에서 미사용)
-├── quality_gate.py # 품질 게이트 (현재 pdf_ocr에서 미사용)
-└── orientation.py  # 회전/deskew (현재 pdf_ocr에서 미사용)
+└── tessdata_check.py # tessdata_best 검증
 ```
-
-- **실제 사용**: `pdf_ocr`, `scan_detect`, `preprocess`, `postprocess`만 활성
-- **미사용**: `layout`, `table_ocr`, `quality_gate`, `orientation` — 과거 복잡 파이프라인 잔재
 
 ---
 
@@ -103,7 +88,7 @@ services/ocr/
 1. **영어 인식률 낮음**: kor+eng 혼합 모드에서 영문 구간 오인식 다수
 2. **한글 우선 선택**: `_score_candidate`가 한글 비율을 가중하므로, 영문이 많은 페이지에서 영문 품질이 희생될 수 있음
 3. **image_to_data 미사용**: 한글에서 글자 단위 word 반환으로 띄어쓰기 깨짐 → `image_to_string`만 사용
-4. **lang_split 비활성화**: 한글/영어 분리 처리 시도했으나 한글 94%→34%, 영어 5%→0%로 악화되어 롤백
+4. **후처리 미사용**: 인식률 개선에 집중, 치환 로직 제거
 
 ---
 
@@ -115,23 +100,12 @@ services/ocr/
 - **제약**: `image_to_data` 기반 word 재구성은 한글 띄어쓰기 이슈로 사용 불가 (improvement-log 참조)
 - **요청**: kor+eng 단일 경로 유지 전제로, 영어 인식률 향상 방안 제안 및 구현
 
-### 7.2 lang_split 재검토 (선택)
-
-- **위치**: `services/ocr/lang_split.py` (현재 비활성)
-- **이슈**: 영어 블록 감지(conf/Latin 휴리스틱) 부정확, word_data 기반 병합 시 한글 순서·띄어쓰기 깨짐
-- **요청**: image_to_string 결과를 베이스로 유지하면서, 특정 영역만 eng로 재처리·치환하는 방식 검토
-
-### 7.3 후처리 패턴 확장
-
-- **위치**: `services/ocr/postprocess.py`
-- **요청**: 실제 오인식 사례 수집 후 `TERM_CORRECTIONS`, `PATTERN_RULES`에 추가. 과도한 패턴은 오탐 위험
-
-### 7.4 전처리/선택 로직 튜닝
+### 7.2 전처리/선택 로직 튜닝
 
 - **위치**: `services/ocr/pdf_ocr.py` `_score_candidate`, `_simple_ocr`
 - **요청**: 영문 비율이 높은 페이지에서도 품질이 나쁘지 않도록 선택 기준 재검토
 
-### 7.5 tessdata 버전 확인
+### 7.3 tessdata 버전 확인
 
 - **요청**: `tessdata_best` 사용 여부 확인 (kor 12 MB+, eng 4.7 MB+). fast 버전이면 교체 권장
 

@@ -340,7 +340,7 @@ LANG = "kor_custom+eng"  # 커스텀 한국어 + 영어
 - [ ] 1차: 원본 이미지 → `image_to_string`
 - [ ] 2차: Otsu 이진화 (1차 부족 시만)
 - [ ] `kor+eng` + `tessdata_best` 조합
-- [ ] 후처리(`postprocess`) 적용
+- [ ] 후처리 미사용 (인식률 우선)
 - [ ] Tesseract 호출에 `try/except` 적용
 
 ### API/스트리밍
