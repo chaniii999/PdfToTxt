@@ -39,7 +39,7 @@ scan_detect: 디지털 vs 스캔 판별
 | 1 | 원본 RGB | `image_to_string(lang, PSM 6)` | 전처리 없음 |
 | 2 | Otsu 이진화 | PSM 6/4/3 | grayscale → Otsu, 다중 PSM 시도 |
 | 3 | enhance | `image_to_string(lang, PSM 6)` | sharpen + CLAHE (점수 부족 시) |
-| 4 | preset A/B/C | `image_to_string(lang, PSM 6)` | denoise + adaptive/morphology (점수 부족 시) |
+| 4 | preset D/A/B/C | `image_to_string(lang, PSM 6)` | 한글 특화 D 우선, denoise/adaptive/morphology (점수 부족 시) |
 
 - **선택 기준**: `길이 × (0.2 + 0.8×한글비율)` 최대값 (한글 오인식 Latin 억제)
 - **조기 종료**: 점수 > 450이면 추가 시도 생략
@@ -70,8 +70,9 @@ scan_detect: 디지털 vs 스캔 판별
 | 테두리 추가 | `add_ocr_border(rgb, 10)` | 텍스트가 가장자리에 있을 때 인식 저하 방지 (Tesseract 권장) |
 | DPI 350 | `_render_page(dpi=350)` | 글자 높이 20px 이상 확보, 11,172자 구분 |
 | 한글 비율 가중 | `0.2 + 0.8×한글비율` | Latin 오인식 후보 억제, 한글 위주 선택 |
-| sharpen + CLAHE | `enhance_for_ocr` | 자모 경계 선명화 |
-| morphology close | preset C | 끊긴 획 연결 (저대비/연한 글자) |
+| sharpen(0.9) + CLAHE | `enhance_for_ocr` | 자모 경계 선명화 (한글 특화) |
+| preset D | sharpen→CLAHE→Otsu→morph close | 한글 특화: 자모 경계 선명화 후 끊긴 획 연결 |
+| morphology close | preset C, D | 끊긴 획 연결 (저대비/연한 글자) |
 
 ---
 
@@ -142,7 +143,9 @@ services/ocr/
 
 ## 9. 참고 문서
 
+- `docs/ocr/ocr-pipeline.md`: **OCR 파이프라인 흐름** (단계별 처리 순서, 튜닝 참고)
 - `docs/ocr/ocr-error-patterns.md`: **실측 오인식 패턴** (유형 A: 비슷한 글자 헷갈림, 유형 B: 한글→Latin 오인식)
+- `docs/ocr/ocr-misrecognition-encyclopedia.md`: **오인식 백과사전** (한글↔Latin 형태 유사 쌍, 글자 단위)
 - `docs/ocr/improvement-log.md`: OCR 개선 이력, 교훈, 체크리스트
 - `docs/ocr/setup-guide.md`: Tesseract 설치·설정
 - `ocr_test.py`: 원본 vs 추출 인식률 계산 (한글/영어 분리)

@@ -5,6 +5,15 @@
 
 ---
 
+## 2026-02-25 | 한글 특화 OCR 개선
+
+- **enhance_for_ocr**: sharpen 0.7 → 0.9. 자모 경계 선명화로 ㅇ/ㅁ, ㅈ/ㅅ 등 혼동 완화
+- **preset D 추가**: 한글 특화. sharpen(0.9) → CLAHE → Otsu → morphology close. 자모 경계 선명화 후 끊긴 획 연결
+- **후보 순서**: preset D를 A/B/C보다 먼저 시도 (한글 8:영어 2 문서에 유리)
+- **문서**: `ocr-strategy.md` preset D, sharpen 0.9 반영
+
+---
+
 ## 2026-02-25 | 미사용 코드 정리
 
 - **삭제**: `lang_split.py`, `layout.py`, `table_ocr.py`, `quality_gate.py`, `postprocess.py`

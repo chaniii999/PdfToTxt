@@ -15,6 +15,7 @@ from services.ocr.preprocess import (
     PRESET_A,
     PRESET_B,
     PRESET_C,
+    PRESET_D,
     add_ocr_border,
     enhance_for_ocr,
     preprocess_for_ocr,
@@ -55,7 +56,7 @@ def _score_candidate(text: str) -> float:
 
 
 def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, str]:
-    """다중 전처리·PSM 후보 중 최고 점수 선택. 인식률 우선."""
+    """다중 전처리·PSM 후보 중 최고 점수 선택. 한글 특화: preset D, sharpen 강화."""
     pil_rgb = Image.fromarray(rgb)
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -78,7 +79,7 @@ def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, str]:
             best = (t, "enhance+psm6")
     except Exception:
         pass
-    for preset in (PRESET_A, PRESET_B, PRESET_C):
+    for preset in (PRESET_D, PRESET_A, PRESET_B, PRESET_C):
         try:
             preprocessed = preprocess_for_ocr(rgb, preset)
             t = _ocr_string(Image.fromarray(preprocessed), lang, PSM_BLOCK)

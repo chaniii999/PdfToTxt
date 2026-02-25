@@ -6,6 +6,7 @@ import numpy as np
 PRESET_A = "A"
 PRESET_B = "B"
 PRESET_C = "C"
+PRESET_D = "D"  # 한글 특화: 자모 경계 선명화 후 끊긴 획 연결
 
 
 def sharpen(gray: np.ndarray, strength: float = 1.0) -> np.ndarray:
@@ -74,7 +75,17 @@ def _preset_c(gray: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 
-PRESET_MAP = {PRESET_A: _preset_a, PRESET_B: _preset_b, PRESET_C: _preset_c}
+def _preset_d(gray: np.ndarray) -> np.ndarray:
+    """프리셋 D(한글 특화): sharpen → CLAHE → Otsu → morphology close. 자모 경계 선명화 후 끊긴 획 연결."""
+    sharpened = sharpen(gray, strength=0.9)
+    clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
+    enhanced = clahe.apply(sharpened)
+    _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+
+PRESET_MAP = {PRESET_A: _preset_a, PRESET_B: _preset_b, PRESET_C: _preset_c, PRESET_D: _preset_d}
 
 
 def add_ocr_border(img: np.ndarray, border_px: int = 10, color: int = 255) -> np.ndarray:
@@ -111,8 +122,8 @@ def binarize_for_ocr_no_crop(rgb_array: np.ndarray, preset: str = PRESET_A) -> n
     return binarize(gray, preset)
 
 
-def enhance_for_ocr(rgb_array: np.ndarray) -> np.ndarray:
-    """이진화 없이 대비·선명도만 개선. Tesseract가 그레이스케일로 인식."""
+def enhance_for_ocr(rgb_array: np.ndarray, sharpen_strength: float = 0.9) -> np.ndarray:
+    """이진화 없이 대비·선명도만 개선. 한글 특화: sharpen 0.9로 자모 경계 선명화."""
     gray = to_grayscale(rgb_array)
-    sharpened = sharpen(gray, strength=0.7)
+    sharpened = sharpen(gray, strength=sharpen_strength)
     return enhance_contrast_clahe(sharpened, clip_limit=2.5)
