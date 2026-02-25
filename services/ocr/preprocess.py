@@ -77,6 +77,15 @@ def _preset_c(gray: np.ndarray) -> np.ndarray:
 PRESET_MAP = {PRESET_A: _preset_a, PRESET_B: _preset_b, PRESET_C: _preset_c}
 
 
+def add_ocr_border(img: np.ndarray, border_px: int = 10, color: int = 255) -> np.ndarray:
+    """한글 OCR: 텍스트가 가장자리에 있을 때 인식 저하 방지. Tesseract 권장 10px 흰 테두리."""
+    value = (color, color, color) if len(img.shape) == 3 else color
+    return cv2.copyMakeBorder(
+        img, border_px, border_px, border_px, border_px,
+        cv2.BORDER_CONSTANT, value=value
+    )
+
+
 def to_grayscale(img: np.ndarray) -> np.ndarray:
     if len(img.shape) == 2:
         return img

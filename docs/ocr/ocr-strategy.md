@@ -35,31 +35,60 @@ scan_detect: 디지털 vs 스캔 판별
 
 | 단계 | 입력 | Tesseract 호출 | 비고 |
 |------|------|----------------|------|
+| 0 | deskew 후 | - | 한글 특화: 10px 흰 테두리 추가 (`add_ocr_border`) |
 | 1 | 원본 RGB | `image_to_string(lang, PSM 6)` | 전처리 없음 |
-| 2 | Otsu 이진화 | `image_to_string(lang, PSM 6)` | grayscale → Otsu |
+| 2 | Otsu 이진화 | PSM 6/4/3 | grayscale → Otsu, 다중 PSM 시도 |
 | 3 | enhance | `image_to_string(lang, PSM 6)` | sharpen + CLAHE (점수 부족 시) |
-| 4 | preset A | `image_to_string(lang, PSM 6)` | denoise + adaptive 이진화 (점수 부족 시) |
-| 5 | Otsu | `image_to_string(lang, PSM 3)` | PSM 자동 (최종 폴백) |
+| 4 | preset A/B/C | `image_to_string(lang, PSM 6)` | denoise + adaptive/morphology (점수 부족 시) |
 
-- **선택 기준**: `길이 × (0.4 + 0.6×한글비율)` 최대값
-- **조기 종료**: 점수 > 350이면 추가 시도 생략
-- **최대 호출**: 5회 (실제로는 2~5회)
+- **선택 기준**: `길이 × (0.2 + 0.8×한글비율)` 최대값 (한글 오인식 Latin 억제)
+- **조기 종료**: 점수 > 450이면 추가 시도 생략
 
 ---
 
-## 3. 주요 설정값
+## 3. 한글 OCR 특성 및 대응
+
+### 3.1 한글 구조
+
+- **자모 조합**: 52개 자모(초성·중성·종성) → 11,172개 완성형
+- **특성**: 자모 경계가 뚜렷해야 정확한 글자 구분 가능. 끊긴 획·흐린 경계는 Latin 오인식 유발
+
+### 3.2 자주 발생하는 오인식
+
+| 한글 | Latin 오인식 | 비고 |
+|------|--------------|------|
+| ㅅ | s | 자모 유사 |
+| ㅇ | O | 원형 |
+| ㅁ | M | 사각형 |
+| ㄴ | L, r | |
+| kor+eng 혼용 | 한글을 Latin으로 읽는 경향 | Tesseract 한계 |
+
+### 3.3 적용 전략
+
+| 전략 | 구현 | 목적 |
+|------|------|------|
+| 테두리 추가 | `add_ocr_border(rgb, 10)` | 텍스트가 가장자리에 있을 때 인식 저하 방지 (Tesseract 권장) |
+| DPI 350 | `_render_page(dpi=350)` | 글자 높이 20px 이상 확보, 11,172자 구분 |
+| 한글 비율 가중 | `0.2 + 0.8×한글비율` | Latin 오인식 후보 억제, 한글 위주 선택 |
+| sharpen + CLAHE | `enhance_for_ocr` | 자모 경계 선명화 |
+| morphology close | preset C | 끊긴 획 연결 (저대비/연한 글자) |
+
+---
+
+## 4. 주요 설정값
 
 | 항목 | 값 | 위치 |
 |------|-----|------|
 | 언어 | `kor+eng` | `pdf_ocr.LANG` |
-| PSM | `6` (블록), `3` (자동) | `pdf_ocr.PSM_*` |
+| PSM | `6` (블록), `4` (열), `3` (자동) | `pdf_ocr.PSM_*` |
 | OEM | `3` (기본 LSTM) | `pdf_ocr.PSM_*` |
-| DPI | 300 | `_render_page()` |
+| DPI | 350 | `_render_page()` |
+| 테두리 | 10px 흰색 | `preprocess.add_ocr_border` |
 | Tesseract 경로 | `/usr/bin/tesseract` | `pdf_ocr.pytesseract.tesseract_cmd` |
 
 ---
 
-## 4. 모듈 구조
+## 5. 모듈 구조
 
 ```
 services/ocr/
@@ -72,7 +101,7 @@ services/ocr/
 
 ---
 
-## 5. 실측 인식률 (기준 문서)
+## 6. 실측 인식률 (기준 문서)
 
 | 구분 | 원본 | 추출 | 인식률 |
 |------|------|------|--------|
@@ -83,7 +112,7 @@ services/ocr/
 
 ---
 
-## 6. 알려진 한계
+## 7. 알려진 한계
 
 1. **영어 인식률 낮음**: kor+eng 혼합 모드에서 영문 구간 오인식 다수
 2. **한글 우선 선택**: `_score_candidate`가 한글 비율을 가중하므로, 영문이 많은 페이지에서 영문 품질이 희생될 수 있음
@@ -92,34 +121,35 @@ services/ocr/
 
 ---
 
-## 7. 보완 요청 사항 (다음 AI Agent용)
+## 8. 보완 요청 사항 (다음 AI Agent용)
 
-### 7.1 영어 인식률 개선 (최우선)
+### 8.1 영어 인식률 개선 (최우선)
 
 - **현상**: LLM, AI, PII, Self-Reflective Reliability, Hugging Face, Read-Write Token 등 영문·약어 오인식
 - **제약**: `image_to_data` 기반 word 재구성은 한글 띄어쓰기 이슈로 사용 불가 (improvement-log 참조)
 - **요청**: kor+eng 단일 경로 유지 전제로, 영어 인식률 향상 방안 제안 및 구현
 
-### 7.2 전처리/선택 로직 튜닝
+### 8.2 전처리/선택 로직 튜닝
 
 - **위치**: `services/ocr/pdf_ocr.py` `_score_candidate`, `_simple_ocr`
 - **요청**: 영문 비율이 높은 페이지에서도 품질이 나쁘지 않도록 선택 기준 재검토
 
-### 7.3 tessdata 버전 확인
+### 8.3 tessdata 버전 확인
 
 - **요청**: `tessdata_best` 사용 여부 확인 (kor 12 MB+, eng 4.7 MB+). fast 버전이면 교체 권장
 
 ---
 
-## 8. 참고 문서
+## 9. 참고 문서
 
+- `docs/ocr/ocr-error-patterns.md`: **실측 오인식 패턴** (유형 A: 비슷한 글자 헷갈림, 유형 B: 한글→Latin 오인식)
 - `docs/ocr/improvement-log.md`: OCR 개선 이력, 교훈, 체크리스트
 - `docs/ocr/setup-guide.md`: Tesseract 설치·설정
 - `ocr_test.py`: 원본 vs 추출 인식률 계산 (한글/영어 분리)
 
 ---
 
-## 9. 테스트 방법
+## 10. 테스트 방법
 
 ```bash
 # 인식률 계산 (원본 텍스트 vs OCR 결과)

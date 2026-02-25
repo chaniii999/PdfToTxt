@@ -11,7 +11,14 @@ import numpy as np
 from PIL import Image
 import pytesseract
 
-from services.ocr.preprocess import PRESET_A, PRESET_B, PRESET_C, enhance_for_ocr, preprocess_for_ocr
+from services.ocr.preprocess import (
+    PRESET_A,
+    PRESET_B,
+    PRESET_C,
+    add_ocr_border,
+    enhance_for_ocr,
+    preprocess_for_ocr,
+)
 from services.ocr.scan_detect import compute_scan_score, PAGE_DIRECT
 from services.ocr.orientation import deskew_rgb
 from services.ocr.tessdata_check import verify_tessdata_best
@@ -22,14 +29,6 @@ LANG = "kor+eng"
 PSM_BLOCK = "--psm 6 --oem 3"
 PSM_COLUMN = "--psm 4 --oem 3"
 PSM_AUTO = "--psm 3 --oem 3"
-
-# 영문 핵심어 보존 가산점용 키워드
-ENGLISH_KEYWORDS = frozenset({
-    "LLM", "AI", "PII", "API", "GPT", "PDF", "OCR", "NLP", "URL", "HTTP",
-    "Self-Reflective", "Reliability", "Hugging Face", "Token", "Safety",
-    "Protocols", "Kill-Switch", "Read-Write",
-})
-
 
 def _render_page(page: fitz.Page, dpi: int = 350) -> np.ndarray:
     """페이지를 RGB numpy array로 렌더링."""
@@ -46,21 +45,13 @@ def _korean_ratio(text: str) -> float:
     return korean / len(chars)
 
 
-def _count_english_keywords(text: str) -> int:
-    """추출 텍스트 내 영문 핵심어 포함 개수."""
-    upper = text.upper()
-    return sum(1 for kw in ENGLISH_KEYWORDS if kw.upper() in upper)
-
-
 def _score_candidate(text: str) -> float:
-    """선택 점수: 길이×(0.4+0.6×한글비율) + 영문 핵심어 가산점."""
+    """선택 점수: 길이×(0.2+0.8×한글비율). 한글 오인식(Latin) 억제."""
     t = text.strip()
     if not t:
         return 0.0
     kr = _korean_ratio(t)
-    base = len(t) * (0.4 + 0.6 * kr)
-    keyword_bonus = _count_english_keywords(t) * 25
-    return base + keyword_bonus
+    return len(t) * (0.2 + 0.8 * kr)
 
 
 def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, str]:
@@ -119,6 +110,7 @@ def _process_page_sync(page: fitz.Page, idx: int, total: int, lang: str) -> tupl
         else:
             rgb = _render_page(page)
             rgb = deskew_rgb(rgb)
+            rgb = add_ocr_border(rgb)
             text, psm_used = _simple_ocr(rgb, lang)
             method = "ocr"
 
