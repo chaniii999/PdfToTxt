@@ -8,6 +8,18 @@ PRESET_B = "B"
 PRESET_C = "C"
 
 
+def sharpen(gray: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """언샤프 마스크로 글자 경계 선명화. JPG/스캔 흐림 보정."""
+    gaussian = cv2.GaussianBlur(gray, (0, 0), 3.0)
+    return cv2.addWeighted(gray, 1.0 + strength, gaussian, -strength, 0)
+
+
+def enhance_contrast_clahe(gray: np.ndarray, clip_limit: float = 2.0, tile_size: int = 8) -> np.ndarray:
+    """CLAHE로 대비 향상. 이진화 없이 그레이스케일만. Tesseract 입력용."""
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
+    return clahe.apply(gray)
+
+
 def crop_border(gray: np.ndarray, margin_pct: float = 0.015) -> np.ndarray:
     """외곽 마진(기본 1.5%) 제거. 스캔 그림자·펀치홀·바인딩 영역 제거."""
     h, w = gray.shape
@@ -82,3 +94,16 @@ def preprocess_for_ocr(rgb_array: np.ndarray, preset: str = PRESET_A) -> np.ndar
     gray = to_grayscale(rgb_array)
     cropped = crop_document_region(gray)
     return binarize(cropped, preset)
+
+
+def binarize_for_ocr_no_crop(rgb_array: np.ndarray, preset: str = PRESET_A) -> np.ndarray:
+    """crop 없이 이진화만. JPG→PDF 등 이미 정제된 이미지용."""
+    gray = to_grayscale(rgb_array)
+    return binarize(gray, preset)
+
+
+def enhance_for_ocr(rgb_array: np.ndarray) -> np.ndarray:
+    """이진화 없이 대비·선명도만 개선. Tesseract가 그레이스케일로 인식."""
+    gray = to_grayscale(rgb_array)
+    sharpened = sharpen(gray, strength=0.7)
+    return enhance_contrast_clahe(sharpened, clip_limit=2.5)

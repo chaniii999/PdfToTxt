@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-02-25 | OCR 품질 개선 (기술 지시서 반영)
+
+- **tessdata_best 검증**: `tessdata_check.py` 추가. kor 10MB+, eng 4.5MB+ 확인. 미달 시 경고 로그 + NDJSON `tessdata_ok`/`tessdata_msg` 반환
+- **_score_candidate 고도화**: 영문 핵심어(LLM, AI, PII, API 등) 포함 시 키워드당 +25점 가산. 한글비율 중심에서 영문 보존 반영
+- **Deskew 재삽입**: `orientation.deskew_rgb()` 적용. I, L, 1 오인식 완화 목적. OCR 전단에 Hough deskew
+- **후처리 패턴 확장**: `(ㄴㄴ)`→`(LLM)`, `(시)`→`(AI)`, `(미)`→`(PII)`, `ㄴㄴ`→`LLM`, `&I`→`AI` 추가
+
+---
+
+## 2026-02-25 | 한글/영어 분리 처리 (lang_split) — 비활성화
+
+- **배경**: kor+eng 혼합 모드에서 영어 구간 오인식 다수 (AI→시, LLM→ㄴㄴ, PII→미 등). 영어 인식률 ~54%
+- **조치**: `lang_split.py` 모듈 추가. kor/kor+eng 1차 → 영어 블록 감지 → eng 재처리 → 병합
+- **결과**: 실측에서 한글 94%→34%, 영어 5%→0%로 품질 악화. 영어 블록 오판·병합 순서 이슈로 판단
+- **롤백**: `pdf_ocr.py`에서 lang_split 비활성화. 기존 `_simple_ocr(kor+eng)` 단일 경로로 복귀
+- **교훈**: word_data 기반 재구성은 한글 띄어쓰기·순서 이슈에 취약. 영어 블록 감지 정확도 개선 필요
+
+---
+
 ## 2026-02-23 | 기본 OCR 파이프라인 구축
 
 - **작업**: PDF → 이미지 렌더링(300 DPI) → Tesseract `image_to_string` → 텍스트 반환
@@ -132,6 +151,16 @@
   3. `pdf_ocr.py`에서 OCR 결과에 `correct_ocr_text()` 적용
 - **후속**: `kor` 단독 사용 시 영문이 숫자로 변환되는 부작용 확인. `kor+eng`로 복원하되 `tessdata_best`(12 MB) + 후처리 조합으로 운용. `tessdata_best` 적용 전에는 혼동이 심했으나 학습 데이터 교체 후 크게 개선
 - **교훈**: `kor` 단독은 영문이 아예 없는 문서에만 유효. 영문 약어가 포함된 문서는 `kor+eng` + 후처리가 최선. 핵심은 학습 데이터 품질(`tessdata_best`)이며, 후처리 패턴은 실제 오인식 사례를 수집하며 점진적으로 추가할 것
+
+---
+
+## 2026-02-25 | 기본 OCR 인식률 개선 (전처리·선택 로직)
+
+- **목적**: 후처리 치환 대신 Tesseract 기본 인식 품질 향상
+- **조치**:
+  1. **preprocess.py**: `sharpen()`, `enhance_contrast_clahe()`, `enhance_for_ocr()` 추가
+  2. **pdf_ocr.py**: 선택 기준 `길이 × (0.4 + 0.6×한글비율)` 적용
+  3. **속도 최적화**: Tesseract 호출 최대 4회로 축소. 점수 350 초과 시 조기 종료. DPI 300 유지
 
 ---
 

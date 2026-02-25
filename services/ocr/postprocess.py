@@ -25,7 +25,27 @@ TERM_CORRECTIONS: dict[str, str] = {
     "SS H": "SSH",
     "SS L": "SSL",
     "FA Q": "FAQ",
+    "ㄴㄴ": "LLM",
+    "&I": "AI",
+    "Token'S": "Token'을",
+    "LIM": "LLM",
+    "(LIM)": "(LLM)",
+    "(PI )": "(PII)",
+    "(PI)": "(PII)",
 }
+
+# 괄호 안 영문 오인식 복원 (AI→시, LLM→ㄴㄴ, PII→미)
+PAREN_MISREAD_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\(ㄴㄴ\)"), "(LLM)"),
+    (re.compile(r"\(시\)"), "(AI)"),
+    (re.compile(r"\(미\)"), "(PII)"),
+]
+
+# 문맥 기반 영문 복원 (접근하는 시는 → 접근하는 AI는)
+CONTEXT_AI_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"접근하는 시는"), "접근하는 AI는"),
+    (re.compile(r"생성형 시 "), "생성형 AI "),
+]
 
 PATTERN_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bA\s*[|l1]\b"), "AI"),
@@ -47,6 +67,9 @@ def correct_ocr_text(text: str) -> str:
     """OCR 결과 텍스트에서 흔한 오인식 패턴을 보정."""
     for wrong, right in TERM_CORRECTIONS.items():
         text = text.replace(wrong, right)
+
+    for pattern, replacement in PAREN_MISREAD_PATTERNS:
+        text = pattern.sub(replacement, text)
 
     for pattern, replacement in PATTERN_RULES:
         text = pattern.sub(replacement, text)

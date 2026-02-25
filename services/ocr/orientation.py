@@ -67,3 +67,19 @@ def hough_deskew(gray: np.ndarray, max_angle: float = 15.0) -> tuple[np.ndarray,
     matrix = cv2.getRotationMatrix2D(center, median_angle, 1.0)
     rotated = cv2.warpAffine(gray, matrix, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     return rotated, round(median_angle, 2)
+
+
+def deskew_rgb(rgb: np.ndarray, max_angle: float = 15.0) -> np.ndarray:
+    """RGB 이미지에 Hough deskew 적용. I, L, 1 오인식 완화."""
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    deskewed_gray, angle = hough_deskew(gray, max_angle)
+    if abs(angle) < 0.3:
+        return rgb
+    h, w = gray.shape[:2]
+    center = (w // 2, h // 2)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    return cv2.warpAffine(
+        rgb, matrix, (w, h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )

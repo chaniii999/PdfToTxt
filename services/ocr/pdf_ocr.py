@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from typing import AsyncGenerator
 
 import fitz
@@ -10,15 +11,24 @@ import numpy as np
 from PIL import Image
 import pytesseract
 
-from services.ocr.preprocess import PRESET_A, preprocess_for_ocr
+from services.ocr.preprocess import PRESET_A, enhance_for_ocr, preprocess_for_ocr
 from services.ocr.scan_detect import compute_scan_score, PAGE_DIRECT
 from services.ocr.postprocess import correct_ocr_text
+from services.ocr.orientation import deskew_rgb
+from services.ocr.tessdata_check import verify_tessdata_best
 
 pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
 LANG = "kor+eng"
 PSM_BLOCK = "--psm 6 --oem 3"
 PSM_AUTO = "--psm 3 --oem 3"
+
+# 영문 핵심어 보존 가산점용 키워드
+ENGLISH_KEYWORDS = frozenset({
+    "LLM", "AI", "PII", "API", "GPT", "PDF", "OCR", "NLP", "URL", "HTTP",
+    "Self-Reflective", "Reliability", "Hugging Face", "Token", "Safety",
+    "Protocols", "Kill-Switch", "Read-Write",
+})
 
 
 def _render_page(page: fitz.Page, dpi: int = 300) -> np.ndarray:
@@ -27,37 +37,71 @@ def _render_page(page: fitz.Page, dpi: int = 300) -> np.ndarray:
     return np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
 
 
-def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, str]:
-    """최소 전처리 OCR: 원본 → Otsu → preprocess 프리셋 A → PSM 자동. Tesseract 호출 최소화."""
-    pil_rgb = Image.fromarray(rgb)
+def _korean_ratio(text: str) -> float:
+    """한글 문자 비율 (0~1). 품질 보조 지표."""
+    chars = text.replace(" ", "").replace("\n", "")
+    if not chars:
+        return 0.0
+    korean = sum(1 for c in chars if "\uac00" <= c <= "\ud7a3")
+    return korean / len(chars)
 
+
+def _count_english_keywords(text: str) -> int:
+    """추출 텍스트 내 영문 핵심어 포함 개수."""
+    upper = text.upper()
+    return sum(1 for kw in ENGLISH_KEYWORDS if kw.upper() in upper)
+
+
+def _score_candidate(text: str) -> float:
+    """선택 점수: 길이×(0.4+0.6×한글비율) + 영문 핵심어 가산점."""
+    t = text.strip()
+    if not t:
+        return 0.0
+    kr = _korean_ratio(t)
+    base = len(t) * (0.4 + 0.6 * kr)
+    keyword_bonus = _count_english_keywords(t) * 25
+    return base + keyword_bonus
+
+
+def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, str]:
+    """최소 전처리 OCR: 원본 → Otsu → (부족 시) enhance 또는 preset A → PSM 자동. 최대 4회 호출."""
+    pil_rgb = Image.fromarray(rgb)
     text1 = _ocr_string(pil_rgb, lang, PSM_BLOCK)
-    if len(text1.strip()) > 20:
-        return text1, PSM_BLOCK
 
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     pil_bin = Image.fromarray(binary)
-
     text2 = _ocr_string(pil_bin, lang, PSM_BLOCK)
-    if len(text2.strip()) > len(text1.strip()):
-        return text2, PSM_BLOCK
+
+    candidates: list[tuple[str, str]] = [(text1, PSM_BLOCK), (text2, PSM_BLOCK)]
+    best_so_far = max(candidates, key=lambda x: _score_candidate(x[0]))
+
+    if _score_candidate(best_so_far[0]) > 350:
+        return best_so_far[0], best_so_far[1]
+
+    try:
+        enhanced = enhance_for_ocr(rgb)
+        text3 = _ocr_string(Image.fromarray(enhanced), lang, PSM_BLOCK)
+        candidates.append((text3, f"{PSM_BLOCK}+enhance"))
+    except Exception:
+        text3 = ""
+    if text3 and _score_candidate(text3) > _score_candidate(best_so_far[0]):
+        best_so_far = (text3, f"{PSM_BLOCK}+enhance")
 
     try:
         preprocessed = preprocess_for_ocr(rgb, PRESET_A)
-        pil_prep = Image.fromarray(preprocessed)
-        text3 = _ocr_string(pil_prep, lang, PSM_BLOCK)
+        text4 = _ocr_string(Image.fromarray(preprocessed), lang, PSM_BLOCK)
+        candidates.append((text4, f"{PSM_BLOCK}+presetA"))
     except Exception:
-        text3 = ""
-    if len(text3.strip()) > len(text1.strip()) and len(text3.strip()) > len(text2.strip()):
-        return text3, f"{PSM_BLOCK}+presetA"
+        text4 = ""
+    if text4 and _score_candidate(text4) > _score_candidate(best_so_far[0]):
+        best_so_far = (text4, f"{PSM_BLOCK}+presetA")
 
-    text4 = _ocr_string(pil_bin, lang, PSM_AUTO)
-    if len(text4.strip()) > len(text1.strip()) and len(text4.strip()) > len(text2.strip()) and len(text4.strip()) > len(text3.strip()):
-        return text4, PSM_AUTO
+    text5 = _ocr_string(pil_bin, lang, PSM_AUTO)
+    if _score_candidate(text5) > _score_candidate(best_so_far[0]):
+        best_so_far = (text5, PSM_AUTO)
 
-    best = max([(text1, PSM_BLOCK), (text2, PSM_BLOCK), (text3, f"{PSM_BLOCK}+presetA"), (text4, PSM_AUTO)], key=lambda x: len(x[0].strip()))
-    return best[0], best[1]
+    return best_so_far[0], best_so_far[1]
 
 
 def _ocr_string(pil_img: Image.Image, lang: str, psm: str) -> str:
@@ -78,7 +122,8 @@ def _process_page_sync(page: fitz.Page, idx: int, total: int, lang: str) -> tupl
             method = "direct"
             psm_used = "n/a"
         else:
-            rgb = _render_page(page, dpi=300)
+            rgb = _render_page(page)
+            rgb = deskew_rgb(rgb)
             text, psm_used = _simple_ocr(rgb, lang)
             text = correct_ocr_text(text)
             method = "ocr"
@@ -107,16 +152,30 @@ def _process_page_sync(page: fitz.Page, idx: int, total: int, lang: str) -> tupl
 
 
 async def extract_text_stream(pdf_bytes: bytes, lang: str = LANG) -> AsyncGenerator[str, None]:
-    """페이지별 NDJSON 스트리밍. 각 yield 후 event loop에 제어 넘겨 즉시 전송."""
+    """페이지별 NDJSON 스트리밍. 블로킹 OCR은 스레드에서 실행해 이벤트 루프 비차단."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     total = len(doc)
     all_parts: list[str] = []
     all_methods: list[str] = []
 
+    tess_ok, tess_msg = verify_tessdata_best()
+    if not tess_ok:
+        logging.warning("OCR tessdata: %s", tess_msg)
+    yield json.dumps({
+        "page": 0,
+        "total": total,
+        "method": "started",
+        "tessdata_ok": tess_ok,
+        "tessdata_msg": tess_msg,
+    }) + "\n"
+    await asyncio.sleep(0)
+
     try:
         for idx in range(total):
             page = doc[idx]
-            ndjson_line, text, method = _process_page_sync(page, idx, total, lang)
+            ndjson_line, text, method = await asyncio.to_thread(
+                _process_page_sync, page, idx, total, lang
+            )
 
             if text:
                 all_parts.append(text)
