@@ -12,7 +12,11 @@ import numpy as np
 from PIL import Image
 import pytesseract
 
-from services.ocr.preprocess_minimal import preprocess_minimal
+from services.ocr.preprocess_minimal import (
+    BORDER_PX,
+    preprocess_minimal,
+    UPSCALE_FACTOR,
+)
 from services.ocr.postprocess import correct_ocr_text
 
 try:
@@ -64,8 +68,19 @@ def _render_page(page: fitz.Page, dpi: int = DPI) -> np.ndarray:
     return np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
 
 
-def _ocr_single(pil_img: Image.Image) -> str:
-    """Tesseract 단일 호출. OCR_2PASS=1이면 저신뢰/의심 ROI 재시도."""
+def _ocr_single(pil_img: Image.Image, rgb_original: np.ndarray | None = None) -> str:
+    """1차 kor → 2차 eng(영어 의심후보군만). 실패 시 OCR_2PASS 또는 kor 단일 폴백."""
+    from services.ocr.ocr_twostage import ocr_page_twostage
+    try:
+        return ocr_page_twostage(
+            pil_img,
+            TESS_CONFIG,
+            rgb_original=rgb_original,
+            scale=UPSCALE_FACTOR,
+            border=BORDER_PX,
+        )
+    except Exception:
+        pass
     if OCR_2PASS:
         from services.ocr.ocr_twopass import ocr_page_twopass
         try:
@@ -94,7 +109,7 @@ def _process_page_sync(
             rgb = _render_page(page)
             preprocessed = preprocess_minimal(rgb)
             pil_img = Image.fromarray(preprocessed)
-            text = _ocr_single(pil_img)
+            text = _ocr_single(pil_img, rgb_original=rgb)
             text = correct_ocr_text(text)
             method = "ocr"
         else:

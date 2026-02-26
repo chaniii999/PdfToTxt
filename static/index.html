@@ -36,6 +36,7 @@
     .diff-original-line { font-size: 1em; color: #c00; line-height: 1.3; padding: 0 2px; background: #e8f5e9; border-radius: 2px 2px 0 0; }
     .diff-extracted-line { line-height: 1.3; font-size: 1em; }
     .diff-extracted-line.diff-wrong { background: #ffcccc; border-radius: 2px; }
+    .diff-extracted-line.diff-wrong-kr { background: #ff0000; color: #fff; font-weight: 600; border-radius: 2px; }
     .diff-extracted-line.diff-ins { background: #ffe0b2; border-radius: 2px; }
     .diff-del-wrap { font-size: 1em; background: #f5f0fa; }
     .diff-del-wrap .diff-original-line { color: #6a1b9a; background: #e8f5e9; border-radius: 2px 2px 0 0; }
@@ -432,7 +433,8 @@
         if (op.type === 'm') {
           html += escapeHtml(op.ocr);
         } else if (op.type === 's') {
-          html += '<span class="diff-col"><span class="diff-original-line">' + escapeHtml(op.gt) + '</span><span class="diff-extracted-line diff-wrong">' + escapeHtml(op.ocr) + '</span></span>';
+          var wrongClass = charType(op.gt) === 'korean' ? 'diff-wrong-kr' : 'diff-wrong';
+          html += '<span class="diff-col"><span class="diff-original-line">' + escapeHtml(op.gt) + '</span><span class="diff-extracted-line ' + wrongClass + '">' + escapeHtml(op.ocr) + '</span></span>';
         } else if (op.type === 'i') {
           html += '<span class="diff-extracted-line diff-ins">' + escapeHtml(op.ocr) + '</span>';
         } else if (op.type === 'd') {
