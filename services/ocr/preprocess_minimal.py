@@ -10,7 +10,7 @@ import numpy as np
 BORDER_PX = 10
 SHARPEN_STRENGTH = 0.55  # ㅇ/ㅁ, ㅔ/ㅖ 등 자모 경계 선명화 강화
 CLIP_LIMIT = 2.5  # CLAHE. 얇은 획(ㅖ 가로선 등) 보존
-UPSCALE_FACTOR = float(os.environ.get("OCR_UPSCALE", "1.5"))  # 1.5~2.0x. 획 보존
+UPSCALE_FACTOR = float(os.environ.get("OCR_UPSCALE", "1.5"))  # 1.0=속도 우선, 1.5~2.0=획 보존
 USE_GRAY_INSTEAD_OF_OTSU = os.environ.get("OCR_USE_GRAY", "0").lower() in ("1", "true", "yes")
 
 

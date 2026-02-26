@@ -38,6 +38,18 @@ class TestNormalizeText(unittest.TestCase):
         out, flags, log = normalize_text(inp)
         assert out == expected, f"got {out!r}"
 
+    def test_lem_to_llm_in_parens(self) -> None:
+        """(Lem) -> (LLM). L↔e 시각 혼동."""
+        inp = "초거대 언어 모델(Lem)"
+        out, flags, log = normalize_text(inp)
+        assert "(LLM)" in out, f"got {out!r}"
+
+    def test_pipe_to_ai(self) -> None:
+        """편향 감사: | 모델 -> 편향 감사: AI 모델."""
+        inp = "알고리즘 투명성 및 편향 감사: | 모델의 의사결정"
+        out, flags, log = normalize_text(inp)
+        assert "AI 모델" in out, f"got {out!r}"
+
     def test_self_reflective(self) -> None:
         """Sel f-Ref lective Reliability -> Self-Reflective Reliability."""
         inp = "Sel f-Ref lective Reliability"

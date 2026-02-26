@@ -12,8 +12,14 @@
     button { padding: 0.5rem 1rem; cursor: pointer; background: #333; color: #fff; border: none; border-radius: 4px; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .progress-wrap { display: none; }
-    .progress-bar-bg { width: 100%; height: 24px; background: #e0e0e0; border-radius: 4px; overflow: hidden; }
-    .progress-bar-fill { height: 100%; width: 0%; background: #333; border-radius: 4px; transition: width 0.3s ease; }
+    .progress-bar-bg { width: 100%; height: 24px; background: #e0e0e0; border-radius: 4px; overflow: hidden; display: flex; }
+    .progress-bar-segments { display: flex; width: 100%; height: 100%; gap: 1px; }
+    .progress-bar-segment { flex: 1; min-width: 2px; border-radius: 2px; transition: background 0.2s ease; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .progress-bar-segment .segment-label { font-size: 0.55rem; color: #fff; text-shadow: 0 0 1px #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    .progress-bar-segment.segment-waiting .segment-label { color: #6b7280; }
+    .progress-bar-segment.segment-done { background: #22c55e; }
+    .progress-bar-segment.segment-working { background: #9ca3af; }
+    .progress-bar-segment.segment-waiting { background: #e5e7eb; }
     .progress-label { font-size: 0.85rem; color: #666; }
     .progress-time { font-size: 0.85rem; color: #444; font-variant-numeric: tabular-nums; }
     .progress-info { display: flex; justify-content: space-between; align-items: center; }
@@ -22,7 +28,7 @@
     .h-16 { height: 1rem; }
     .result-header { display: flex; justify-content: space-between; align-items: center; }
     .result-title { font-weight: bold; }
-    .result-text { white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; padding: 1rem; background: #f5f5f5; border-radius: 4px; min-height: 120px; max-height: 500px; overflow-y: auto; font-size: 1rem; min-width: 0; }
+    .result-text { white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; padding: 1rem; background: #f5f5f5; border-radius: 4px; min-height: 120px; max-height: 70vh; overflow-y: auto; font-size: 1rem; min-width: 0; }
     .result-header-left { display: flex; align-items: center; gap: 1rem; }
     .accuracy-result { padding: 0.25rem 0.5rem; background: #f0f8ff; border-radius: 4px; font-size: 0.85rem; }
     .method-info { font-size: 0.85rem; color: #666; }
@@ -71,7 +77,7 @@
 
   <div class="progress-wrap" id="progressWrap">
     <div class="progress-bar-bg">
-      <div class="progress-bar-fill" id="progressFill"></div>
+      <div class="progress-bar-segments" id="progressSegments"></div>
     </div>
     <div class="h-4"></div>
     <div class="progress-info">
@@ -89,29 +95,28 @@
         <div id="accuracyResult" class="accuracy-result" hidden></div>
       </div>
       <div class="result-header-actions">
-        <button type="button" id="pageViewBtn" class="page-nav-btn" hidden>페이지별 보기</button>
+        <button type="button" id="pageViewBtn" class="page-nav-btn" hidden>전체 보기</button>
         <div id="pageNavWrap" class="page-nav" hidden>
           <button type="button" id="pagePrevBtn" class="page-nav-btn">이전</button>
           <span id="pageNavLabel" class="page-nav-label">1 / 1</span>
           <button type="button" id="pageNextBtn" class="page-nav-btn">다음</button>
         </div>
+        <button type="button" id="compareBtn" class="btn-sm">정확도 비교</button>
         <button type="button" id="diffToggleBtn" class="btn-sm" hidden>diff 끄기</button>
         <button type="button" id="diffCopyBtn" class="btn-sm" hidden>diff 복사</button>
         <button type="button" id="copyBtn" class="btn-sm">복사하기</button>
       </div>
     </div>
     <div class="h-4"></div>
-    <div class="method-info" id="methodInfo"></div>
-    <div class="h-6"></div>
-    <pre class="result-text" id="resultText"></pre>
-
-    <div class="h-16"></div>
     <div class="compare-section">
       <label class="compare-label" id="compareLabel">원본 텍스트 (비교용)</label>
       <span id="compareHint" class="compare-hint" hidden>페이지별 보기 시: 원본을 빈 줄로 구분해 페이지 순서대로 붙여넣으세요.</span>
       <textarea id="originalInput" class="compare-textarea" placeholder="원본 PDF 내용을 붙여넣으세요"></textarea>
-      <button type="button" id="compareBtn">정확도 비교</button>
     </div>
+    <div class="h-6"></div>
+    <div class="method-info" id="methodInfo"></div>
+    <div class="h-6"></div>
+    <pre class="result-text" id="resultText"></pre>
   </div>
   <div class="error" id="errorEl" role="alert"></div>
 
@@ -119,7 +124,7 @@
     var fileInput = document.getElementById('fileInput');
     var uploadBtn = document.getElementById('uploadBtn');
     var progressWrap = document.getElementById('progressWrap');
-    var progressFill = document.getElementById('progressFill');
+    var progressSegments = document.getElementById('progressSegments');
     var progressLabel = document.getElementById('progressLabel');
     var progressTime = document.getElementById('progressTime');
     var resultSection = document.getElementById('resultSection');
@@ -129,8 +134,12 @@
 
     var startTime = 0;
     var timerInterval = null;
+    var lastEstimate = '--:--';
+    var lastPage = 0;
+    var lastTotal = 0;
     var rawExtractedText = '';
     var pageTexts = [];
+    var pageMethods = [];
     var totalPages = 0;
     var currentPage = 1;
     var pageViewMode = 'all';
@@ -145,24 +154,33 @@
     }
 
     function estimateRemaining(elapsed, page, total) {
-      if (page <= 0) return '--:--';
+      if (page <= 0 || total <= 0 || page >= total) return '--:--';
       var perPage = elapsed / page;
       var remaining = perPage * (total - page);
-      return formatMMSS(remaining);
+      return formatMMSS(Math.max(0, remaining));
     }
 
     function startTimer() {
+      if (timerInterval) {
+        clearTimeout(timerInterval);
+        timerInterval = null;
+      }
       startTime = Date.now();
+      lastEstimate = '--:--';
+      lastPage = 0;
+      lastTotal = 0;
       progressTime.textContent = '경과 00:00 | 예상 --:--';
-      timerInterval = setInterval(function () {
+      function tick() {
         var elapsed = Date.now() - startTime;
-        progressTime.textContent = '경과 ' + formatMMSS(elapsed) + ' | 예상 --:--';
-      }, 1000);
+        progressTime.textContent = '경과 ' + formatMMSS(elapsed) + ' | 예상 ' + lastEstimate;
+        timerInterval = setTimeout(tick, 100);
+      }
+      timerInterval = setTimeout(tick, 0);
     }
 
     function stopTimer() {
       if (timerInterval) {
-        clearInterval(timerInterval);
+        clearTimeout(timerInterval);
         timerInterval = null;
       }
     }
@@ -170,7 +188,12 @@
     function updateTimerWithEstimate(page, total) {
       var elapsed = Date.now() - startTime;
       var est = estimateRemaining(elapsed, page, total);
-      progressTime.textContent = '경과 ' + formatMMSS(elapsed) + ' | 예상 ' + est;
+      if (page > 0 && total > 0 && est !== '--:--') {
+        lastEstimate = est;
+        lastPage = page;
+        lastTotal = total;
+      }
+      progressTime.textContent = '경과 ' + formatMMSS(elapsed) + ' | 예상 ' + lastEstimate;
     }
 
     function showError(message) {
@@ -224,9 +247,61 @@
       if (file) setFileFromDrop(file);
     }
 
+    function getMethodLabel(method) {
+      if (method === 'direct') return '직접';
+      if (method === 'ocr') return 'OCR';
+      if (method === 'error') return '오류';
+      return method || '';
+    }
+
+    function renderProgressSegments() {
+      progressSegments.innerHTML = '';
+      var total = totalPages || 0;
+      if (total <= 0) return;
+      var receivedCount = 0;
+      for (var i = 0; i < total; i++) {
+        if (pageTexts[i] !== undefined) receivedCount++;
+      }
+      for (var i = 0; i < total; i++) {
+        var seg = document.createElement('div');
+        seg.className = 'progress-bar-segment';
+        var label = '';
+        var title = '페이지 ' + (i + 1);
+        if (pageTexts[i] !== undefined) {
+          seg.classList.add('segment-done');
+          var m = pageMethods[i] || 'ocr';
+          label = getMethodLabel(m);
+          title += ': ' + (m === 'direct' ? '직접 추출' : m === 'ocr' ? 'OCR' : '오류');
+        } else if (receivedCount > 0) {
+          seg.classList.add('segment-working');
+          label = '추출중';
+          title += ': 추출중';
+        } else {
+          seg.classList.add('segment-waiting');
+          label = '대기';
+          title += ': 대기중';
+        }
+        seg.title = title;
+        var span = document.createElement('span');
+        span.className = 'segment-label';
+        span.textContent = label;
+        seg.appendChild(span);
+        progressSegments.appendChild(seg);
+      }
+    }
+
+    function getPagePlaceholder(pageIdx) {
+      var receivedCount = 0;
+      for (var i = 0; i < (totalPages || 0); i++) {
+        if (pageTexts[i] !== undefined) receivedCount++;
+      }
+      return receivedCount > 0 ? '추출중' : '대기중';
+    }
+
     function updateProgress(page, total, method) {
-      var pct = Math.round((page / total) * 100);
-      progressFill.style.width = pct + '%';
+      if (total) totalPages = total;
+      renderProgressSegments();
+      var pct = total ? Math.round((page / total) * 100) : 0;
       var methodLabel = method === 'direct' ? '직접 추출' : method === 'error' ? '오류(건너뜀)' : 'OCR';
       progressLabel.textContent = page + ' / ' + total + ' 페이지 (' + methodLabel + ') — ' + pct + '%';
       updateTimerWithEstimate(page, total);
@@ -239,9 +314,9 @@
       resultSection.hidden = true;
       uploadBtn.disabled = true;
       pageTexts = [];
-      progressFill.style.width = '0%';
+      pageMethods = [];
+      progressSegments.innerHTML = '';
       progressLabel.textContent = '업로드 중...';
-      progressTime.textContent = '';
       progressWrap.style.display = 'block';
       startTimer();
 
@@ -281,11 +356,11 @@
             if (data.done) {
               stopTimer();
               var totalElapsed = Date.now() - startTime;
-              progressFill.style.width = '100%';
+              totalPages = data.total || pageTexts.length || 1;
+              renderProgressSegments();
               progressLabel.textContent = '완료!';
               progressTime.textContent = '작업 완료 ' + formatMMSS(totalElapsed);
               rawExtractedText = data.text || '(텍스트 없음)';
-              totalPages = data.total || pageTexts.length || 1;
               resultText.textContent = rawExtractedText;
               methodInfo.textContent = data.methods ? '추출 방식: ' + data.methods.join(', ') : '';
               document.getElementById('accuracyResult').hidden = true;
@@ -293,17 +368,49 @@
               cachedCompareData = null;
               document.getElementById('diffToggleBtn').hidden = true;
               document.getElementById('diffCopyBtn').hidden = true;
-              pageViewMode = 'all';
               currentPage = 1;
-              document.getElementById('pageViewBtn').hidden = totalPages <= 1;
-              document.getElementById('pageNavWrap').hidden = true;
+              if (totalPages > 1) {
+                pageViewMode = 'page';
+                document.getElementById('pageViewBtn').hidden = false;
+                document.getElementById('pageViewBtn').textContent = '전체 보기';
+                document.getElementById('pageNavWrap').hidden = false;
+                document.getElementById('compareHint').hidden = false;
+                updatePageNav();
+                resultText.textContent = pageTexts[0] || rawExtractedText;
+              } else {
+                pageViewMode = 'all';
+                document.getElementById('pageViewBtn').hidden = true;
+                document.getElementById('pageNavWrap').hidden = true;
+                document.getElementById('compareHint').hidden = true;
+                resultText.textContent = rawExtractedText;
+              }
               resultSection.hidden = false;
             } else {
               if (data.page >= 1 && data.text !== undefined) {
                 pageTexts[data.page - 1] = data.text || '';
+                pageMethods[data.page - 1] = data.method || 'ocr';
+                totalPages = data.total || totalPages;
+                if (totalPages > 1 && pageViewMode === 'all') {
+                  pageViewMode = 'page';
+                  document.getElementById('pageViewBtn').hidden = false;
+                  document.getElementById('pageViewBtn').textContent = '전체 보기';
+                  document.getElementById('pageNavWrap').hidden = false;
+                  document.getElementById('compareHint').hidden = false;
+                  updatePageNav();
+                }
+                var len = totalPages || pageTexts.length || 1;
+                var parts = [];
+                for (var i = 0; i < len; i++) {
+                  parts.push(pageTexts[i] !== undefined ? (pageTexts[i] || '') : getPagePlaceholder(i));
+                }
+                rawExtractedText = parts.join('\n\n');
+                var curText = pageTexts[currentPage - 1];
+                resultText.textContent = (pageViewMode === 'page' && totalPages > 1) ? (curText !== undefined ? (curText || '') : getPagePlaceholder(currentPage - 1)) : rawExtractedText;
+                resultSection.hidden = false;
               }
+              if (data.total) totalPages = data.total;
               var method = data.error ? 'error' : (data.method || '');
-              updateProgress(data.page || 0, data.total || 0, method);
+              updateProgress(data.page || 0, data.total || totalPages || 0, method);
             }
           }
         }
@@ -545,7 +652,8 @@
 
     function getCurrentPageText() {
       if (pageViewMode === 'all') return rawExtractedText;
-      return pageTexts[currentPage - 1] || '(해당 페이지 텍스트 없음)';
+      var t = pageTexts[currentPage - 1];
+      return t !== undefined ? (t || '') : getPagePlaceholder(currentPage - 1);
     }
 
     function updateResultDisplay() {

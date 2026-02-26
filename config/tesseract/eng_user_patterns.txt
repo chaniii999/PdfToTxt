@@ -1,0 +1,5 @@
+# 2차 eng OCR 패턴 (의회문서·AI 표준안)
+# Tesseract user_patterns: 예상 문자 시퀀스 (regex 유사 문법)
+# https://github.com/tesseract-ocr/tesseract/blob/main/tessdata/eng.user-patterns
+[A-Z][a-z]*-[A-Z][a-z]*
+[A-Z]{2,5}

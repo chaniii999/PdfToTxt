@@ -1,0 +1,14 @@
+# 2차 eng OCR 도메인 단어 (의회문서·AI 표준안)
+# Tesseract user_words 형식: 한 줄에 한 단어
+LLM
+PII
+AI
+Token
+Hugging
+Face
+Read-Write
+Self-Reflective
+Reliability
+Kill-Switch
+Blockchain
+API

@@ -142,8 +142,11 @@ def _merge_en_en_spaces(text: str) -> str:
     return "".join(result)
 
 
-# 약어 복구: LLeMm -> LLM 등
-ACRONYM_MAP = {"LLeMm": "LLM", "LLeM": "LLM", "Llm": "LLM"}
+# 약어 복구: LLeMm -> LLM 등 (괄호 내부)
+ACRONYM_MAP = {
+    "LLeMm": "LLM", "LLeM": "LLM", "Llm": "LLM",
+    "Lem": "LLM", "Lemm": "LLM",  # L↔e 시각 혼동
+}
 
 
 def _fix_paren_content(text: str) -> str:
@@ -163,6 +166,17 @@ def _fix_paren_content(text: str) -> str:
         return "(" + inner + ")"
 
     return PAREN_INNER.sub(repl, text)
+
+
+# AI→| 오인식: "편향 감사: | 모델" → "편향 감사: AI 모델"
+PIPE_TO_AI = re.compile(r":\s*\|(\s*모델)")
+
+
+def _fix_pipe_to_ai(text: str) -> str:
+    """콜론 뒤 단독 | 를 AI로. (AI→| OCR 오인식)."""
+    def repl(m: re.Match) -> str:
+        return ": AI" + m.group(1)
+    return PIPE_TO_AI.sub(repl, text)
 
 
 def _fix_ocr_similar_in_en(text: str) -> str:
@@ -235,6 +249,13 @@ RULES: list[NormalizeRule] = [
         condition="\\( ... \\) 구간",
         example="(L\\nL\\ne\\nM\\nm) → (LLM)",
         apply_fn=_fix_paren_content,
+    ),
+    NormalizeRule(
+        rule_id="pipe_to_ai",
+        description="콜론 뒤 | → AI (AI 오인식)",
+        condition=": | 모델 문맥",
+        example="편향 감사: | 모델 → 편향 감사: AI 모델",
+        apply_fn=_fix_pipe_to_ai,
     ),
     NormalizeRule(
         rule_id="ocr_similar_en",

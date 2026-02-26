@@ -3,7 +3,7 @@
 프로세스:
 1. 1차: kor image_to_string → 띄어쓰기 유지 (base_text)
 2. image_to_data로 eng 의심후보 bbox 추출 (완성형 한글 1개라도 있으면 제외)
-3. 2차: 의심후보만 eng 재인식 → base_text에 순차 치환
+3. 2차: 의심후보만 eng 재인식 → eng_ocr_rules로 분류·보정 → base_text에 순차 치환
 """
 
 import os
@@ -15,12 +15,22 @@ import numpy as np
 from PIL import Image
 import pytesseract
 
+from services.ocr.eng_ocr_rules import (
+    classify_eng_candidate,
+    get_eng_tesseract_config,
+)
+
 CROP_PADDING = int(os.environ.get("OCR_CROP_PADDING", "8"))
 ENG_ASCII_MIN = float(os.environ.get("OCR_ENG_ASCII_MIN", "0.5"))
+ENG_ROI_MAX = int(os.environ.get("OCR_ENG_ROI_MAX", "20"))  # eng 2차 호출 상한 (3분+ 지연 방지)
 
 _SYLLABLE = re.compile(r"[\uac00-\ud7a3]")
 _JAMO = re.compile(r"[\u3130-\u318f\u1100-\u11ff]")
+# 자모 전용 word 여부 (ㄹ, ㅇ 등만 있으면 eng ROI 제외 → ol 등 오삽입 방지)
+_JAMO_ONLY = re.compile(r"^[\u3130-\u318f\u1100-\u11ff]+$")
 _ENG_SYMBOLS = re.compile(r"[|\\/\[\]()+\-!<>]")
+# 순수 구두점만 있는 word 제외용 (괄호·쉼표 등은 eng ROI 대상 아님)
+_PURE_PUNCT = re.compile(r"^[|\\/\[\]()+\-!<>.,;:]+$")
 _DIGIT = re.compile(r"[0-9]")
 _ASCII = re.compile(r"[a-zA-Z0-9]")
 _LETTER = re.compile(r"[a-zA-Z]")
@@ -67,11 +77,17 @@ def _is_eng_suspicious(word: dict[str, Any]) -> bool:
     """
     영어 의심후보군: 1) 숫자 2) 특수기호 3) 미완성 한글(자모)만.
     절대 규칙: 1차에서 완성된 한글(가-힣)이 1개라도 있으면 eng 절대 적용 안 함.
+    제외: 순수 구두점만 있는 word (괄호·쉼표 등) → eng OCR 시 P/C 등으로 오인식됨.
+    제외: 자모 전용 word (ㄹ, ㅇ 등) → eng OCR 시 ol 등 오삽입 (률이→ol이).
     """
     text = word["text"]
     if not text:
         return False
     if _has_complete_syllable(text):
+        return False
+    if _PURE_PUNCT.match(text):
+        return False
+    if _JAMO_ONLY.match(text):
         return False
     if _DIGIT.search(text):
         return True
@@ -111,7 +127,7 @@ def _ocr_roi_eng(
     box: tuple[int, int, int, int],
     config: str,
 ) -> str:
-    """ROI 영역만 eng OCR. PSM 8(단어)."""
+    """ROI 영역만 eng OCR. PSM 8(단어). eng 전용 user_words/user_patterns 적용."""
     left, top, w, h = box
     if w < 2 or h < 2:
         return ""
@@ -120,7 +136,8 @@ def _ocr_roi_eng(
         if len(crop.shape) == 3:
             crop = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
         pil_crop = Image.fromarray(crop)
-        cfg = re.sub(r"--psm\s+\d+", "", config).strip() + " --psm 8"
+        base = re.sub(r"--psm\s+\d+", "", config).strip()
+        cfg = get_eng_tesseract_config(base) + " --psm 8"
         return pytesseract.image_to_string(pil_crop, lang="eng", config=cfg).strip()
     except Exception:
         return ""
@@ -185,6 +202,8 @@ def ocr_page_twostage(
 
     replacements: list[tuple[str, str]] = []
     for w in words:
+        if len(replacements) >= ENG_ROI_MAX:
+            break
         if not _is_eng_suspicious(w) or w["width"] < 4 or w["height"] < 4:
             continue
         kor_text = w["text"]
@@ -210,13 +229,9 @@ def ocr_page_twostage(
         else:
             eng_text = _ocr_roi_eng(np.array(pil_img), box_preproc, base_config)
 
-        if (
-            eng_text
-            and _ascii_ratio(eng_text) >= ENG_ASCII_MIN
-            and _has_letter(eng_text)
-            and not _contains_korean(eng_text)
-        ):
-            replacements.append((kor_text, eng_text))
+        accepted = classify_eng_candidate(kor_text, eng_text)
+        if accepted and _ascii_ratio(accepted) >= ENG_ASCII_MIN and _has_letter(accepted):
+            replacements.append((kor_text, accepted))
 
     result = base_text
     pos = 0
