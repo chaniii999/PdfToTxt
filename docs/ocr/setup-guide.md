@@ -98,7 +98,14 @@ pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 # pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 ```
 
-> **권장**: 하드코딩 대신 환경변수(`TESSERACT_CMD`)나 `.env`로 관리.
+> **권장**: `.env`에 `TESSERACT_CMD` 설정. 미설정 시 `/usr/bin/tesseract` 사용.
+
+### 환경변수
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `TESSERACT_CMD` | `/usr/bin/tesseract` | Tesseract 실행 파일 경로 |
+| `TESSERACT_REQUIRE_BEST` | (미설정) | `1`/`true`/`yes` 시 tessdata_best 미달이면 OCR 중단 |
 
 ### 경로를 모를 때
 

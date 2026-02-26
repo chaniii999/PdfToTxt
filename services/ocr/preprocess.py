@@ -29,8 +29,8 @@ def crop_border(gray: np.ndarray, margin_pct: float = 0.015) -> np.ndarray:
     return gray[my:h - my, mx:w - mx]
 
 
-def crop_document_region(gray: np.ndarray) -> np.ndarray:
-    """가장 큰 사각형 컨투어를 찾아 문서 영역만 crop. 실패 시 마진 crop."""
+def crop_document_region(gray: np.ndarray, min_area_ratio: float = 0.3) -> np.ndarray:
+    """가장 큰 사각형 컨투어를 찾아 문서 영역만 crop. 실패·과소 영역 시 마진 crop."""
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -38,10 +38,14 @@ def crop_document_region(gray: np.ndarray) -> np.ndarray:
         return crop_border(gray)
     largest = max(contours, key=cv2.contourArea)
     area_ratio = cv2.contourArea(largest) / (gray.shape[0] * gray.shape[1])
-    if area_ratio < 0.3:
+    if area_ratio < min_area_ratio:
         return crop_border(gray)
     x, y, w, h = cv2.boundingRect(largest)
-    return gray[y:y + h, x:x + w]
+    cropped = gray[y:y + h, x:x + w]
+    crop_ratio = (w * h) / (gray.shape[0] * gray.shape[1])
+    if crop_ratio < 0.5:
+        return crop_border(gray)
+    return cropped
 
 
 def denoise_adaptive(gray: np.ndarray) -> np.ndarray:
@@ -77,7 +81,7 @@ def _preset_c(gray: np.ndarray) -> np.ndarray:
 
 def _preset_d(gray: np.ndarray) -> np.ndarray:
     """프리셋 D(한글 특화): sharpen → CLAHE → Otsu → morphology close. 자모 경계 선명화 후 끊긴 획 연결."""
-    sharpened = sharpen(gray, strength=0.9)
+    sharpened = sharpen(gray, strength=1.0)
     clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
     enhanced = clahe.apply(sharpened)
     _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -122,8 +126,8 @@ def binarize_for_ocr_no_crop(rgb_array: np.ndarray, preset: str = PRESET_A) -> n
     return binarize(gray, preset)
 
 
-def enhance_for_ocr(rgb_array: np.ndarray, sharpen_strength: float = 0.9) -> np.ndarray:
-    """이진화 없이 대비·선명도만 개선. 한글 특화: sharpen 0.9로 자모 경계 선명화."""
+def enhance_for_ocr(rgb_array: np.ndarray, sharpen_strength: float = 1.0) -> np.ndarray:
+    """이진화 없이 대비·선명도만 개선. 한글 특화: sharpen 1.0으로 자모 경계 선명화."""
     gray = to_grayscale(rgb_array)
     sharpened = sharpen(gray, strength=sharpen_strength)
-    return enhance_contrast_clahe(sharpened, clip_limit=2.5)
+    return enhance_contrast_clahe(sharpened, clip_limit=3.0)

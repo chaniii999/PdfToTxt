@@ -5,6 +5,44 @@
 
 ---
 
+## 2026-02-25 | OCR 후처리 (오탈자사전) 추가
+
+- **postprocess.py**: 오인식→정답 매핑 사전 + 정규식 패턴
+- **데이터 출처**: ocr-error-patterns, 실측 비교 데이터
+- **적용**: _simple_ocr 결과에 `correct_ocr_text` 적용 (OCR 경로만)
+- **매핑 예**: 0!!→PII, ㄴㄴ→LLM, 표준만→표준안, 개민→개인, 민증→인증 등
+
+---
+
+## 2026-02-25 | B 요원 감사 보고서 반영
+
+- **90/180/270도 회전 보정**: `correct_orientation_rgb` 파이프라인 삽입 (render 직후)
+- **Tesseract 경로**: `TESSERACT_CMD` 환경변수 지원, dotenv 로드
+- **tessdata 미달**: 경고 메시지 강화, `TESSERACT_REQUIRE_BEST` 시 tessdata 미달이면 OCR 중단
+- **예외 처리**: `pytesseract.TesseractError` 분리, 로깅 추가
+- **crop_document_region**: crop_ratio < 0.5 시 crop_border 폴백 (과소 영역 방지)
+
+---
+
+## 2026-02-25 | OCR 속도 개선 — 정확도 상승 부수효과
+
+- **early stop**: 400 → 450. enhance·preset 생략 확대 → 페이지당 ~10초 단축
+- **PSM 13 제거**: 1차 후보 5개 → 4개. Tesseract 1회 감소
+- **실측**: 한글 83.9%→89.2%, 영어 43.3%→64.9%. 속도 개선과 함께 정확도도 상승
+- **가설**: enhance·preset이 일부 페이지에서 과처리로 품질 저하. early stop 450으로 1차 후보만 선택하는 쪽이 유리했을 가능성
+
+---
+
+## 2026-02-25 | 인식률 개선 체크리스트 적용
+
+- **sharpen**: preset D, enhance_for_ocr 0.9 → 1.0. 자모 경계 선명화 강화
+- **CLAHE**: enhance_for_ocr clip_limit 2.5 → 3.0
+- **early stop**: 450 → 400 (이후 450으로 복원, 속도 우선)
+- **PSM 13**: 추가 후 제거 (속도 우선)
+- **DPI**: 350 유지
+
+---
+
 ## 2026-02-25 | 한글 특화 OCR 개선
 
 - **enhance_for_ocr**: sharpen 0.7 → 0.9. 자모 경계 선명화로 ㅇ/ㅁ, ㅈ/ㅅ 등 혼동 완화

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PDF OCR 테스트</title>
   <style>
-    body { font-family: sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    body { font-family: sans-serif; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
     h1 { font-size: 1.25rem; }
-    .upload-wrap { display: flex; flex-direction: column; gap: 1rem; }
+    .upload-wrap { display: flex; flex-direction: column; gap: 1rem; padding: 1.5rem; border: 2px dashed #ccc; border-radius: 8px; transition: border-color 0.2s, background 0.2s; }
     input[type="file"] { padding: 0.5rem; }
     button { padding: 0.5rem 1rem; cursor: pointer; background: #333; color: #fff; border: none; border-radius: 4px; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -22,7 +22,7 @@
     .h-16 { height: 1rem; }
     .result-header { display: flex; justify-content: space-between; align-items: center; }
     .result-title { font-weight: bold; }
-    .result-text { white-space: pre-wrap; word-break: break-all; padding: 1rem; background: #f5f5f5; border-radius: 4px; min-height: 120px; max-height: 500px; overflow-y: auto; font-size: 1rem; }
+    .result-text { white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; padding: 1rem; background: #f5f5f5; border-radius: 4px; min-height: 120px; max-height: 500px; overflow-y: auto; font-size: 1rem; min-width: 0; }
     .result-header-left { display: flex; align-items: center; gap: 1rem; }
     .accuracy-result { padding: 0.25rem 0.5rem; background: #f0f8ff; border-radius: 4px; font-size: 0.85rem; }
     .method-info { font-size: 0.85rem; color: #666; }
@@ -40,15 +40,29 @@
     .diff-del-wrap { font-size: 1em; background: #f5f0fa; }
     .diff-del-wrap .diff-original-line { color: #6a1b9a; background: #e8f5e9; border-radius: 2px 2px 0 0; }
     .diff-del-wrap .diff-extracted-line { background: #e1bee7; color: #6a1b9a; }
+    .page-nav { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .page-nav-btn { padding: 0.25rem 0.6rem; font-size: 0.85rem; }
+    .page-nav-label { font-size: 0.9rem; color: #444; }
+    .result-header-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .compare-hint { font-size: 0.85rem; color: #666; }
+    .btn-sm { font-size: 0.8rem; padding: 0.25rem 0.6rem; }
+    .upload-wrap.drag-over { border-color: #333; background: #f8f8f8; }
+    .ocr-toggle-wrap { display: flex; align-items: center; gap: 0.5rem; }
+    .ocr-toggle-wrap input[type="checkbox"] { width: 1rem; height: 1rem; cursor: pointer; }
+    .ocr-toggle-wrap label { cursor: pointer; font-size: 0.9rem; user-select: none; }
   </style>
 </head>
 <body>
   <h1>PDF TO TEXT CONVERTER</h1>
-  <div class="upload-wrap">
+  <div class="upload-wrap" id="uploadWrap">
     <label>
-      <span>PDF 파일 선택</span>
+      <span>PDF 파일 선택 또는 여기에 드래그</span>
       <input type="file" id="fileInput" accept="application/pdf" />
     </label>
+    <div class="ocr-toggle-wrap">
+      <input type="checkbox" id="forceOcrToggle" />
+      <label for="forceOcrToggle">OCR 모드 (ON: 모든 페이지 OCR 강제)</label>
+    </div>
     <button type="button" id="uploadBtn" disabled>업로드 및 OCR</button>
   </div>
 
@@ -73,9 +87,17 @@
         <div class="result-title">추출 결과</div>
         <div id="accuracyResult" class="accuracy-result" hidden></div>
       </div>
-      <button type="button" id="diffToggleBtn" style="font-size:0.8rem;padding:0.25rem 0.6rem;display:none;">diff 끄기</button>
-      <button type="button" id="diffCopyBtn" style="font-size:0.8rem;padding:0.25rem 0.6rem;display:none;">diff 복사</button>
-      <button type="button" id="copyBtn" style="font-size:0.8rem;padding:0.25rem 0.6rem;">복사하기</button>
+      <div class="result-header-actions">
+        <button type="button" id="pageViewBtn" class="page-nav-btn" hidden>페이지별 보기</button>
+        <div id="pageNavWrap" class="page-nav" hidden>
+          <button type="button" id="pagePrevBtn" class="page-nav-btn">이전</button>
+          <span id="pageNavLabel" class="page-nav-label">1 / 1</span>
+          <button type="button" id="pageNextBtn" class="page-nav-btn">다음</button>
+        </div>
+        <button type="button" id="diffToggleBtn" class="btn-sm" hidden>diff 끄기</button>
+        <button type="button" id="diffCopyBtn" class="btn-sm" hidden>diff 복사</button>
+        <button type="button" id="copyBtn" class="btn-sm">복사하기</button>
+      </div>
     </div>
     <div class="h-4"></div>
     <div class="method-info" id="methodInfo"></div>
@@ -84,7 +106,8 @@
 
     <div class="h-16"></div>
     <div class="compare-section">
-      <label class="compare-label">원본 텍스트 (비교용)</label>
+      <label class="compare-label" id="compareLabel">원본 텍스트 (비교용)</label>
+      <span id="compareHint" class="compare-hint" hidden>페이지별 보기 시: 원본을 빈 줄로 구분해 페이지 순서대로 붙여넣으세요.</span>
       <textarea id="originalInput" class="compare-textarea" placeholder="원본 PDF 내용을 붙여넣으세요"></textarea>
       <button type="button" id="compareBtn">정확도 비교</button>
     </div>
@@ -106,6 +129,10 @@
     var startTime = 0;
     var timerInterval = null;
     var rawExtractedText = '';
+    var pageTexts = [];
+    var totalPages = 0;
+    var currentPage = 1;
+    var pageViewMode = 'all';
     var cachedDiffHtml = '';
     var cachedCompareData = null;
 
@@ -161,6 +188,41 @@
       clearError();
     }
 
+    function setFileFromDrop(file) {
+      if (!file || file.type !== 'application/pdf') {
+        errorEl.textContent = 'PDF 파일만 업로드 가능합니다.';
+        return;
+      }
+      clearError();
+      var dt = new DataTransfer();
+      dt.items.add(file);
+      fileInput.files = dt.files;
+      uploadBtn.disabled = false;
+    }
+
+    function handleDragOver(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      document.getElementById('uploadWrap').classList.add('drag-over');
+    }
+
+    function handleDragLeave(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.currentTarget.contains(e.relatedTarget)) {
+        document.getElementById('uploadWrap').classList.remove('drag-over');
+      }
+    }
+
+    function handleDrop(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      document.getElementById('uploadWrap').classList.remove('drag-over');
+      var file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) setFileFromDrop(file);
+    }
+
     function updateProgress(page, total, method) {
       var pct = Math.round((page / total) * 100);
       progressFill.style.width = pct + '%';
@@ -175,6 +237,7 @@
       clearError();
       resultSection.hidden = true;
       uploadBtn.disabled = true;
+      pageTexts = [];
       progressFill.style.width = '0%';
       progressLabel.textContent = '업로드 중...';
       progressTime.textContent = '';
@@ -183,6 +246,10 @@
 
       var formData = new FormData();
       formData.append('file', file);
+      var forceOcrToggle = document.getElementById('forceOcrToggle');
+      if (forceOcrToggle && forceOcrToggle.checked) {
+        formData.append('force_ocr', 'true');
+      }
 
       try {
         var res = await fetch('/ocr', { method: 'POST', body: formData });
@@ -217,18 +284,25 @@
               progressLabel.textContent = '완료!';
               progressTime.textContent = '작업 완료 ' + formatMMSS(totalElapsed);
               rawExtractedText = data.text || '(텍스트 없음)';
+              totalPages = data.total || pageTexts.length || 1;
               resultText.textContent = rawExtractedText;
               methodInfo.textContent = data.methods ? '추출 방식: ' + data.methods.join(', ') : '';
               document.getElementById('accuracyResult').hidden = true;
               cachedDiffHtml = '';
               cachedCompareData = null;
-              document.getElementById('diffToggleBtn').style.display = 'none';
-              document.getElementById('diffCopyBtn').style.display = 'none';
+              document.getElementById('diffToggleBtn').hidden = true;
+              document.getElementById('diffCopyBtn').hidden = true;
+              pageViewMode = 'all';
+              currentPage = 1;
+              document.getElementById('pageViewBtn').hidden = totalPages <= 1;
+              document.getElementById('pageNavWrap').hidden = true;
               resultSection.hidden = false;
-            } else if (data.error) {
-              updateProgress(data.page, data.total, 'error');
             } else {
-              updateProgress(data.page, data.total, data.method);
+              if (data.page >= 1 && data.text !== undefined) {
+                pageTexts[data.page - 1] = data.text || '';
+              }
+              var method = data.error ? 'error' : (data.method || '');
+              updateProgress(data.page || 0, data.total || 0, method);
             }
           }
         }
@@ -241,7 +315,7 @@
     }
 
     function handleCopyBtnClick() {
-      var text = rawExtractedText || resultText.textContent;
+      var text = getCurrentPageText();
       navigator.clipboard.writeText(text).then(function () {
         var btn = document.getElementById('copyBtn');
         btn.textContent = '복사됨!';
@@ -351,11 +425,22 @@
       return html;
     }
 
-    function handleCompareBtnClick() {
-      var original = document.getElementById('originalInput').value;
-      var extracted = rawExtractedText || resultText.textContent || '';
+    function getOriginalForCompare() {
+      var original = document.getElementById('originalInput').value.trim();
+      if (pageViewMode === 'page' && totalPages > 1) {
+        var parts = original.split(/\n\n+/).map(function (s) { return s.trim(); }).filter(Boolean);
+        if (parts.length >= currentPage) {
+          return parts[currentPage - 1];
+        }
+      }
+      return original;
+    }
 
-      if (!original.trim()) {
+    function handleCompareBtnClick() {
+      var original = getOriginalForCompare();
+      var extracted = getCurrentPageText() || '';
+
+      if (!document.getElementById('originalInput').value.trim()) {
         errorEl.textContent = '원본 텍스트를 입력하세요.';
         return;
       }
@@ -399,9 +484,9 @@
       resultText.innerHTML = cachedDiffHtml;
       var toggleBtn = document.getElementById('diffToggleBtn');
       var diffCopyBtn = document.getElementById('diffCopyBtn');
-      toggleBtn.style.display = '';
+      toggleBtn.hidden = false;
       toggleBtn.textContent = 'diff 끄기';
-      diffCopyBtn.style.display = '';
+      diffCopyBtn.hidden = false;
     }
 
     function buildDiffCopyText() {
@@ -438,7 +523,7 @@
       var toggleBtn = document.getElementById('diffToggleBtn');
       if (!cachedDiffHtml) return;
       if (toggleBtn.textContent === 'diff 끄기') {
-        resultText.textContent = rawExtractedText;
+        resultText.textContent = getCurrentPageText();
         toggleBtn.textContent = 'diff 보기';
       } else {
         resultText.innerHTML = cachedDiffHtml;
@@ -446,8 +531,77 @@
       }
     }
 
+    function getCurrentPageText() {
+      if (pageViewMode === 'all') return rawExtractedText;
+      return pageTexts[currentPage - 1] || '(해당 페이지 텍스트 없음)';
+    }
+
+    function updateResultDisplay() {
+      var text = getCurrentPageText();
+      if (cachedDiffHtml && document.getElementById('diffToggleBtn').textContent === 'diff 보기') {
+        resultText.textContent = text;
+      } else if (!cachedDiffHtml) {
+        resultText.textContent = text;
+      }
+    }
+
+    function updatePageNav() {
+      document.getElementById('pageNavLabel').textContent = currentPage + ' / ' + totalPages;
+      document.getElementById('pagePrevBtn').disabled = currentPage <= 1;
+      document.getElementById('pageNextBtn').disabled = currentPage >= totalPages;
+    }
+
+    function handlePageViewClick() {
+      if (pageViewMode === 'all') {
+        pageViewMode = 'page';
+        currentPage = 1;
+        document.getElementById('pageViewBtn').textContent = '전체 보기';
+        document.getElementById('pageNavWrap').hidden = false;
+        document.getElementById('compareHint').hidden = false;
+        updatePageNav();
+      } else {
+        pageViewMode = 'all';
+        document.getElementById('pageViewBtn').textContent = '페이지별 보기';
+        document.getElementById('pageNavWrap').hidden = true;
+        document.getElementById('compareHint').hidden = true;
+      }
+      resetCompareState();
+      resultText.textContent = getCurrentPageText();
+    }
+
+    function resetCompareState() {
+      cachedDiffHtml = '';
+      cachedCompareData = null;
+      document.getElementById('accuracyResult').hidden = true;
+      document.getElementById('diffToggleBtn').hidden = true;
+      document.getElementById('diffCopyBtn').hidden = true;
+    }
+
+    function handlePagePrevClick() {
+      if (currentPage <= 1) return;
+      currentPage--;
+      updatePageNav();
+      resetCompareState();
+      resultText.textContent = getCurrentPageText();
+    }
+
+    function handlePageNextClick() {
+      if (currentPage >= totalPages) return;
+      currentPage++;
+      updatePageNav();
+      resetCompareState();
+      resultText.textContent = getCurrentPageText();
+    }
+
     fileInput.addEventListener('change', handleFileChange);
+    var uploadWrap = document.getElementById('uploadWrap');
+    uploadWrap.addEventListener('dragover', handleDragOver);
+    uploadWrap.addEventListener('dragleave', handleDragLeave);
+    uploadWrap.addEventListener('drop', handleDrop);
     uploadBtn.addEventListener('click', handleUploadClick);
+    document.getElementById('pageViewBtn').addEventListener('click', handlePageViewClick);
+    document.getElementById('pagePrevBtn').addEventListener('click', handlePagePrevClick);
+    document.getElementById('pageNextBtn').addEventListener('click', handlePageNextClick);
     document.getElementById('copyBtn').addEventListener('click', handleCopyBtnClick);
     document.getElementById('compareBtn').addEventListener('click', handleCompareBtnClick);
     document.getElementById('diffToggleBtn').addEventListener('click', handleDiffToggleClick);

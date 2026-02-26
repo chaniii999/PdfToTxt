@@ -146,6 +146,7 @@ services/ocr/
 - `docs/ocr/ocr-pipeline.md`: **OCR 파이프라인 흐름** (단계별 처리 순서, 튜닝 참고)
 - `docs/ocr/ocr-error-patterns.md`: **실측 오인식 패턴** (유형 A: 비슷한 글자 헷갈림, 유형 B: 한글→Latin 오인식)
 - `docs/ocr/ocr-misrecognition-encyclopedia.md`: **오인식 백과사전** (한글↔Latin 형태 유사 쌍, 글자 단위)
+- `docs/ocr/ocr-improvement-checklist.md`: **인식률 개선 체크리스트** (할 일 정리)
 - `docs/ocr/improvement-log.md`: OCR 개선 이력, 교훈, 체크리스트
 - `docs/ocr/setup-guide.md`: Tesseract 설치·설정
 - `ocr_test.py`: 원본 vs 추출 인식률 계산 (한글/영어 분리)

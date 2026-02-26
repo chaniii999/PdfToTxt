@@ -1,8 +1,10 @@
-"""PDF 텍스트 추출: 디지털 직접 추출 우선, 스캔본은 최소 전처리 OCR."""
+"""PDF 텍스트 추출: 한글 문서 특화 최소 파이프라인. 1~2초/페이지 목표."""
 
 import asyncio
 import json
 import logging
+import os
+import time
 from typing import AsyncGenerator
 
 import fitz
@@ -11,149 +13,121 @@ import numpy as np
 from PIL import Image
 import pytesseract
 
-from services.ocr.preprocess import (
-    PRESET_A,
-    PRESET_B,
-    PRESET_C,
-    PRESET_D,
-    add_ocr_border,
-    enhance_for_ocr,
-    preprocess_for_ocr,
+from services.ocr.preprocess_minimal import preprocess_minimal
+from services.ocr.postprocess import correct_ocr_text
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+_tesseract_cmd = os.environ.get("TESSERACT_CMD", "/usr/bin/tesseract")
+pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
+
+# Tesseract 옵션 통일 (한글 문서 특화)
+DPI = 300
+LANG = "kor"
+TESS_CONFIG = (
+    "--oem 1 "
+    "--psm 6 "
+    "-c preserve_interword_spaces=1 "
+    "-c tessedit_do_invert=0"
 )
-from services.ocr.scan_detect import compute_scan_score, PAGE_DIRECT
-from services.ocr.orientation import deskew_rgb
-from services.ocr.tessdata_check import verify_tessdata_best
 
-pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
-LANG = "kor+eng"
-PSM_BLOCK = "--psm 6 --oem 3"
-PSM_COLUMN = "--psm 4 --oem 3"
-PSM_AUTO = "--psm 3 --oem 3"
-
-def _render_page(page: fitz.Page, dpi: int = 350) -> np.ndarray:
-    """페이지를 RGB numpy array로 렌더링."""
+def _render_page(page: fitz.Page, dpi: int = DPI) -> np.ndarray:
+    """페이지를 RGB numpy array로 렌더링. DPI 300 고정."""
     pix = page.get_pixmap(dpi=dpi, alpha=False)
     return np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
 
 
-def _korean_ratio(text: str) -> float:
-    """한글 문자 비율 (0~1). 품질 보조 지표."""
-    chars = text.replace(" ", "").replace("\n", "")
-    if not chars:
-        return 0.0
-    korean = sum(1 for c in chars if "\uac00" <= c <= "\ud7a3")
-    return korean / len(chars)
-
-
-def _score_candidate(text: str) -> float:
-    """선택 점수: 길이×(0.2+0.8×한글비율). 한글 오인식(Latin) 억제."""
-    t = text.strip()
-    if not t:
-        return 0.0
-    kr = _korean_ratio(t)
-    return len(t) * (0.2 + 0.8 * kr)
-
-
-def _simple_ocr(rgb: np.ndarray, lang: str) -> tuple[str, str]:
-    """다중 전처리·PSM 후보 중 최고 점수 선택. 한글 특화: preset D, sharpen 강화."""
-    pil_rgb = Image.fromarray(rgb)
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    pil_bin = Image.fromarray(binary)
-
-    candidates: list[tuple[str, str]] = [
-        (_ocr_string(pil_rgb, lang, PSM_BLOCK), "rgb+psm6"),
-        (_ocr_string(pil_bin, lang, PSM_BLOCK), "otsu+psm6"),
-        (_ocr_string(pil_bin, lang, PSM_COLUMN), "otsu+psm4"),
-        (_ocr_string(pil_bin, lang, PSM_AUTO), "otsu+psm3"),
-    ]
-    best = max(candidates, key=lambda x: _score_candidate(x[0]))
-    if _score_candidate(best[0]) > 450:
-        return best[0], best[1]
-
+def _ocr_single(pil_img: Image.Image) -> str:
+    """Tesseract 단일 호출. 메모리 상에서 바로 전달."""
     try:
-        enhanced = enhance_for_ocr(rgb)
-        t = _ocr_string(Image.fromarray(enhanced), lang, PSM_BLOCK)
-        if _score_candidate(t) > _score_candidate(best[0]):
-            best = (t, "enhance+psm6")
-    except Exception:
-        pass
-    for preset in (PRESET_D, PRESET_A, PRESET_B, PRESET_C):
-        try:
-            preprocessed = preprocess_for_ocr(rgb, preset)
-            t = _ocr_string(Image.fromarray(preprocessed), lang, PSM_BLOCK)
-            if _score_candidate(t) > _score_candidate(best[0]):
-                best = (t, f"preset{preset}+psm6")
-        except Exception:
-            pass
-
-    return best[0], best[1]
-
-
-def _ocr_string(pil_img: Image.Image, lang: str, psm: str) -> str:
-    """image_to_string 단일 호출. Tesseract가 자체 단어 그룹핑 유지."""
-    try:
-        return pytesseract.image_to_string(pil_img, lang=lang, config=psm).strip()
-    except Exception:
+        return pytesseract.image_to_string(
+            pil_img,
+            lang=LANG,
+            config=TESS_CONFIG,
+        ).strip()
+    except pytesseract.TesseractError as e:
+        logging.warning("Tesseract 오류: %s", str(e)[:200])
+        return ""
+    except Exception as e:
+        logging.warning("OCR 예외: %s", type(e).__name__, exc_info=True)
         return ""
 
 
-def _process_page_sync(page: fitz.Page, idx: int, total: int, lang: str) -> tuple[str, str, str]:
-    """단일 페이지 처리 후 (NDJSON 줄, 텍스트, 메서드) 반환."""
+def _process_page_sync(
+    page: fitz.Page,
+    idx: int,
+    total: int,
+) -> tuple[str, str, str]:
+    """단일 페이지 처리. (NDJSON 줄, 텍스트, 메서드) 반환."""
+    t0 = time.perf_counter()
     try:
-        score = compute_scan_score(page)
+        rgb = _render_page(page)
+        logging.info("OCR page=%d 변환 직후 image.shape=%s dpi=%d", idx + 1, rgb.shape, DPI)
 
-        if score.decision == PAGE_DIRECT:
-            text = page.get_text("text").strip()
-            method = "direct"
-            psm_used = "n/a"
-        else:
-            rgb = _render_page(page)
-            rgb = deskew_rgb(rgb)
-            rgb = add_ocr_border(rgb)
-            text, psm_used = _simple_ocr(rgb, lang)
-            method = "ocr"
+        preprocessed = preprocess_minimal(rgb)
+        pil_img = Image.fromarray(preprocessed)
+
+        text = _ocr_single(pil_img)
+        text = correct_ocr_text(text)
+
+        elapsed = time.perf_counter() - t0
+        logging.info(
+            "OCR page=%d elapsed=%.2fs shape=%s dpi=%d psm=6",
+            idx + 1,
+            elapsed,
+            preprocessed.shape,
+            DPI,
+        )
+        if elapsed > 3.0:
+            logging.warning("OCR page=%d 병목: %.2fs > 3초", idx + 1, elapsed)
 
         ndjson = json.dumps({
             "page": idx + 1,
             "total": total,
-            "method": method,
-            "psm_used": psm_used,
-            "scan_score": {
-                "words": score.word_count,
-                "text_area": round(score.text_area_ratio, 4),
-                "img_area": round(score.image_area_ratio, 4),
-            },
+            "method": "ocr",
+            "psm_used": "6",
+            "dpi": DPI,
+            "elapsed_sec": round(elapsed, 2),
+            "image_shape": list(preprocessed.shape),
+            "text": text,
         }) + "\n"
-        return ndjson, text, method
+        return ndjson, text, "ocr"
 
     except Exception as err:
+        elapsed = time.perf_counter() - t0
+        logging.exception("OCR page=%d 오류: %s", idx + 1, str(err)[:200])
         ndjson = json.dumps({
             "page": idx + 1,
             "total": total,
             "method": "error",
             "error": str(err)[:200],
+            "text": "",
         }) + "\n"
         return ndjson, "", "error"
 
 
-async def extract_text_stream(pdf_bytes: bytes, lang: str = LANG) -> AsyncGenerator[str, None]:
-    """페이지별 NDJSON 스트리밍. 블로킹 OCR은 스레드에서 실행해 이벤트 루프 비차단."""
+async def extract_text_stream(
+    pdf_bytes: bytes,
+    lang: str | None = None,
+    force_ocr: bool | None = None,
+) -> AsyncGenerator[str, None]:
+    """페이지별 NDJSON 스트리밍. 항상 OCR."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     total = len(doc)
     all_parts: list[str] = []
     all_methods: list[str] = []
 
-    tess_ok, tess_msg = verify_tessdata_best()
-    if not tess_ok:
-        logging.warning("OCR tessdata: %s", tess_msg)
     yield json.dumps({
         "page": 0,
         "total": total,
         "method": "started",
-        "tessdata_ok": tess_ok,
-        "tessdata_msg": tess_msg,
+        "dpi": DPI,
+        "psm": 6,
     }) + "\n"
     await asyncio.sleep(0)
 
@@ -161,11 +135,10 @@ async def extract_text_stream(pdf_bytes: bytes, lang: str = LANG) -> AsyncGenera
         for idx in range(total):
             page = doc[idx]
             ndjson_line, text, method = await asyncio.to_thread(
-                _process_page_sync, page, idx, total, lang
+                _process_page_sync, page, idx, total
             )
 
-            if text:
-                all_parts.append(text)
+            all_parts.append(text)
             all_methods.append(f"p{idx + 1}:{method}")
 
             yield ndjson_line

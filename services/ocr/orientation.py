@@ -69,6 +69,35 @@ def hough_deskew(gray: np.ndarray, max_angle: float = 15.0) -> tuple[np.ndarray,
     return rotated, round(median_angle, 2)
 
 
+def correct_orientation_rgb(
+    rgb: np.ndarray, run_osd: bool = True, apply_angle: int | None = None
+) -> tuple[np.ndarray, int]:
+    """90/180/270도 회전 보정. (보정된 rgb, 적용된 각도) 반환. run_osd=False면 OSD 생략, apply_angle 있으면 해당 각도 적용."""
+    if not run_osd and apply_angle is None:
+        return rgb, 0
+    if apply_angle is not None and apply_angle != 0:
+        if apply_angle == 90:
+            return cv2.rotate(rgb, cv2.ROTATE_90_COUNTERCLOCKWISE), apply_angle
+        if apply_angle == 180:
+            return cv2.rotate(rgb, cv2.ROTATE_180), apply_angle
+        if apply_angle == 270:
+            return cv2.rotate(rgb, cv2.ROTATE_90_CLOCKWISE), apply_angle
+        return rgb, 0
+    if not run_osd:
+        return rgb, 0
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    corrected, angle = correct_orientation(gray)
+    if angle == 0:
+        return rgb, 0
+    if angle == 90:
+        return cv2.rotate(rgb, cv2.ROTATE_90_COUNTERCLOCKWISE), angle
+    if angle == 180:
+        return cv2.rotate(rgb, cv2.ROTATE_180), angle
+    if angle == 270:
+        return cv2.rotate(rgb, cv2.ROTATE_90_CLOCKWISE), angle
+    return rgb, 0
+
+
 def deskew_rgb(rgb: np.ndarray, max_angle: float = 15.0) -> np.ndarray:
     """RGB 이미지에 Hough deskew 적용. I, L, 1 오인식 완화."""
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
