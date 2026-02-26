@@ -3,11 +3,14 @@
 1. 오인식 패턴 치환 (자주 발생하는 wrong→right)
 2. 사전 기반 보정 (typo_map.txt)
 3. 금지 단어 패턴 탐지 (로깅/플래그)
+4. 세그먼트 파손 복구 (postprocess_normalize)
 """
 
 import logging
 import re
 from pathlib import Path
+
+from services.ocr.postprocess_normalize import normalize_text
 
 _CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config" / "postprocess"
 _TYPO_MAP_PATH = _CONFIG_DIR / "typo_map.txt"
@@ -128,4 +131,8 @@ def correct_ocr_text(text: str) -> str:
     prohibited = _load_prohibited_patterns()
     result, _ = _apply_stage3_prohibited(result, prohibited)
 
-    return result
+    # 4. 세그먼트 파손 복구 (줄바꿈/괄호/영문 약어)
+    norm, flags, diff_log = normalize_text(result)
+    if flags:
+        logging.debug("postprocess: normalize flags %s", flags)
+    return norm

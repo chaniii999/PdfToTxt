@@ -32,6 +32,21 @@ OCR 결과에 적용되는 텍스트 정규화 단계. `services/ocr/postprocess
 
 ---
 
+## 4. 세그먼트 파손 복구 (postprocess_normalize)
+
+`services/ocr/postprocess_normalize.py`의 `normalize_text()`가 담당. 줄/토큰 파손 복원.
+
+- **NFC 정규화**: 자모 분리 한글 → 결합형
+- **한글 줄바꿈 복구**: `스\n스로` → `스스로` (1~2글자 조각만)
+- **영문 줄바꿈/공백 복구**: `L\nL\ne\nM\nm` → `LLM`, `Sel f-Ref lective` → `Self-Reflective`
+- **단독 불릿 라인 제거**: `·` 단독 줄 삭제
+- **괄호 내부 정제**: `(L\nL\ne\nM\nm)` → `(LLM)`
+- **가드레일**: 라인당 변경 5% 초과 시 플래그
+
+상세 규칙은 `docs/ocr/postprocess-normalize-rules.md` 참조.
+
+---
+
 ## 설정 파일
 
 | 경로 | 용도 |
