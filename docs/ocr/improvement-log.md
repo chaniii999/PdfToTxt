@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-02-25 | 한글 획 구분·한글 우선 가중치
+
+- **배경**: 한글(기업, 보호, 자기 등)이 영문(JHA, BSE, DEE)으로 오인식
+- **전처리**: Sharpen(자모 경계 선명화), Morphology close(끊긴 획 연결)
+- **Tesseract**: language_model_penalty_non_dict_word=0.25, non_freq_dict_word=0.2
+- **후처리**: JHA→기업, BSE→보호, DEE→자기, REHM→과정, SEAN→하드웨어, 20→보안/로그
+- **문서**: `kor-eng-misrecognition-analysis.md`
+
+---
+
+## 2026-02-25 | 단일 열 문서 최적화 (PSM 6, Hybrid 비활성화)
+
+- **배경**: 실제 문서 확인 결과 단일 열, 2단 아님
+- **Hybrid 기본 비활성화**: PSM 3 블록 순서 이슈 회피
+- **kor+eng**: 영문 약어(Self-Reflective, PII, Hugging Face 등) 인식
+- **노이즈 라인 제거**: `=`, `—`만 있는 줄 후처리에서 제거
+- **kor+eng 실패 시 kor 폴백**
+
+---
+
+## 2026-02-25 | diff 분석 기반 품질 개선
+
+- **원인**: image_to_data level 미필터, 전처리 누락, 표선 노이즈
+- **hybrid_ocr**: level==5(단어)만 사용, 표선 노이즈 블록("=", "—" 등) 필터
+- **preprocess_minimal**: Gaussian Blur, Adaptive Threshold(11, C=2), 10px 흰 테두리, Deskew 0.5°
+- **postprocess**: ㄴㄴM→LLM, 허깅 페미스→Hugging Face 패턴 추가
+- **참고**: `diff-analysis-2026-02-25.md`
+
+---
+
+## 2026-02-25 | kor/eng 분리 2단 OCR (Hybrid)
+
+- **목표**: kor+eng 간섭 제거로 영문 인식률 향상
+- **1단계**: kor 전용 `image_to_data`로 블록별 좌표·신뢰도 파악
+- **2단계**: conf < 60 또는 ASCII 비율 ≥ 60% 영역만 crop
+- **3단계**: crop 영역만 eng 전용 재인식 후 병합
+- **파일**: `hybrid_ocr.py` 신규, `pdf_ocr.py` 통합
+- **환경변수**: `HYBRID_OCR=0` 시 기존 kor 단일 모드
+
+---
+
 ## 2026-02-25 | OCR 후처리 (오탈자사전) 추가
 
 - **postprocess.py**: 오인식→정답 매핑 사전 + 정규식 패턴

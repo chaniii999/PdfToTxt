@@ -36,13 +36,20 @@ def _extract_english(text: str) -> str:
     return "".join(re.findall(r"[a-zA-Z]", text))
 
 
-def _accuracy_percent(ground_truth: str, ocr_result: str) -> float:
-    """원본 대비 OCR 결과의 문자 인식률(%)."""
+def _accuracy_percent(ground_truth: str, ocr_result: str) -> tuple[float, int, int]:
+    """
+    원본 대비 OCR 결과의 문자 인식률.
+    기준: 맞은 글자 수 / 원본 글자 수 (추출 갯수 비율 아님).
+    Returns:
+        (accuracy_percent, correct_count, wrong_count)
+    """
     if len(ground_truth) == 0:
-        return 100.0
+        return 100.0, 0, 0
     edits = _levenshtein(ground_truth, ocr_result)
     correct = max(0, len(ground_truth) - edits)
-    return round(correct / len(ground_truth) * 100, 1)
+    wrong = len(ground_truth) - correct
+    acc = round(correct / len(ground_truth) * 100, 1)
+    return acc, correct, wrong
 
 
 def _load_text(path_or_str: str) -> str:
@@ -58,8 +65,8 @@ def compute_recognition_rates(input1: str, input2: str) -> dict:
     인풋1(원본) vs 인풋2(OCR 결과)의 한글·영어 인식률 계산.
 
     Returns:
-        {"korean": {"accuracy": float, "gt_count": int, "ocr_count": int},
-         "english": {"accuracy": float, "gt_count": int, "ocr_count": int}}
+        {"korean": {"accuracy": float, "correct": int, "wrong": int, "gt_count": int},
+         "english": {...}}
     """
     gt = _load_text(input1)
     ocr = _load_text(input2)
@@ -69,19 +76,21 @@ def compute_recognition_rates(input1: str, input2: str) -> dict:
     gt_en = _extract_english(gt)
     ocr_en = _extract_english(ocr)
 
-    kr_acc = _accuracy_percent(gt_kr, ocr_kr) if gt_kr else None
-    en_acc = _accuracy_percent(gt_en, ocr_en) if gt_en else None
+    kr_acc, kr_correct, kr_wrong = _accuracy_percent(gt_kr, ocr_kr) if gt_kr else (None, 0, 0)
+    en_acc, en_correct, en_wrong = _accuracy_percent(gt_en, ocr_en) if gt_en else (None, 0, 0)
 
     return {
         "korean": {
             "accuracy": kr_acc,
+            "correct": kr_correct,
+            "wrong": kr_wrong,
             "gt_count": len(gt_kr),
-            "ocr_count": len(ocr_kr),
         },
         "english": {
             "accuracy": en_acc,
+            "correct": en_correct,
+            "wrong": en_wrong,
             "gt_count": len(gt_en),
-            "ocr_count": len(ocr_en),
         },
     }
 
@@ -99,14 +108,14 @@ def main() -> None:
     kr = rates["korean"]
     en = rates["english"]
 
-    print("=== OCR 인식률 ===\n")
+    print("=== OCR 인식률 (맞은 글자/원본 글자 기준, 추출 갯수 비율 아님) ===\n")
     if kr["gt_count"] > 0:
-        print(f"한글: {kr['accuracy']}% (원본 {kr['gt_count']}자 → OCR {kr['ocr_count']}자)")
+        print(f"한글: {kr['accuracy']}% (맞음 {kr['correct']}자 / 틀림 {kr['wrong']}자 / 원본 {kr['gt_count']}자)")
     else:
         print("한글: 원본에 한글 없음 (N/A)")
 
     if en["gt_count"] > 0:
-        print(f"영어: {en['accuracy']}% (원본 {en['gt_count']}자 → OCR {en['ocr_count']}자)")
+        print(f"영어: {en['accuracy']}% (맞음 {en['correct']}자 / 틀림 {en['wrong']}자 / 원본 {en['gt_count']}자)")
     else:
         print("영어: 원본에 영어 없음 (N/A)")
 

@@ -1,9 +1,27 @@
-"""한글 문서 특화 최소 전처리: Grayscale, Otsu, Deskew(1도 이상 시만)."""
+"""한글 문서 특화 최소 전처리: Grayscale, Deskew, Otsu, 획 구분 강화, 10px 테두리."""
 
 import cv2
 import numpy as np
 
-DESKEW_MIN_ANGLE = 1.0  # 1도 이상일 때만 deskew 실행
+DESKEW_MIN_ANGLE = 0.5  # 0.5도 이상일 때만 deskew 실행
+BORDER_PX = 10  # Tesseract 권장 흰 테두리
+
+
+def _sharpen_strokes(gray: np.ndarray, strength: float = 0.4) -> np.ndarray:
+    """한글 자모 경계 선명화. ㅇ/ㅁ, ㅈ/ㅅ 등 획 구분 개선."""
+    kernel = np.array([
+        [0, -1, 0],
+        [-1, 5, -1],
+        [0, -1, 0],
+    ], dtype=np.float32)
+    sharpened = cv2.filter2D(gray.astype(np.float32), -1, kernel)
+    return np.clip(gray.astype(np.float32) * (1 - strength) + sharpened * strength, 0, 255).astype(np.uint8)
+
+
+def _morphology_connect_strokes(binary: np.ndarray) -> np.ndarray:
+    """끊긴 한글 획 연결. morphology close (작은 kernel)."""
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 
 def to_grayscale(img: np.ndarray) -> np.ndarray:
@@ -17,6 +35,18 @@ def otsu_binarize(gray: np.ndarray) -> np.ndarray:
     """Otsu threshold 이진화."""
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return binary
+
+
+def add_ocr_border(img: np.ndarray, border_px: int = BORDER_PX, color: int = 255) -> np.ndarray:
+    """Tesseract 권장 10px 흰 테두리."""
+    if len(img.shape) == 3:
+        value = (color, color, color)
+    else:
+        value = color
+    return cv2.copyMakeBorder(
+        img, border_px, border_px, border_px, border_px,
+        cv2.BORDER_CONSTANT, value=value,
+    )
 
 
 def hough_deskew(gray: np.ndarray, max_angle: float = 15.0) -> tuple[np.ndarray, float]:
@@ -57,8 +87,10 @@ def hough_deskew(gray: np.ndarray, max_angle: float = 15.0) -> tuple[np.ndarray,
 
 
 def preprocess_minimal(rgb: np.ndarray) -> np.ndarray:
-    """최소 전처리: Grayscale → Otsu → Deskew(1도 이상 시)."""
+    """전처리: Grayscale → Sharpen → Deskew → Otsu → Morphology → 10px 테두리."""
     gray = to_grayscale(rgb)
-    deskewed, angle = hough_deskew(gray)
+    sharpened = _sharpen_strokes(gray)
+    deskewed, _ = hough_deskew(sharpened)
     binary = otsu_binarize(deskewed)
-    return binary
+    connected = _morphology_connect_strokes(binary)
+    return add_ocr_border(connected)

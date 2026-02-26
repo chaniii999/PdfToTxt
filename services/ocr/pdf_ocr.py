@@ -15,6 +15,7 @@ import pytesseract
 
 from services.ocr.preprocess_minimal import preprocess_minimal
 from services.ocr.postprocess import correct_ocr_text
+from services.ocr.hybrid_ocr import ocr_page_hybrid
 
 try:
     from dotenv import load_dotenv
@@ -25,14 +26,19 @@ except ImportError:
 _tesseract_cmd = os.environ.get("TESSERACT_CMD", "/usr/bin/tesseract")
 pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
 
-# Tesseract 옵션 통일 (한글 문서 특화)
+HYBRID_OCR = os.environ.get("HYBRID_OCR", "0").lower() in ("1", "true", "yes")
+
+# Tesseract 옵션 (단일 열 문서, PSM 6)
 DPI = 300
 LANG = "kor"
+# 한글 우선: kor+eng에서 첫 언어에 가중치. 비사전어(영문 오인식) 페널티.
 TESS_CONFIG = (
     "--oem 1 "
     "--psm 6 "
     "-c preserve_interword_spaces=1 "
-    "-c tessedit_do_invert=0"
+    "-c tessedit_do_invert=0 "
+    "-c language_model_penalty_non_dict_word=0.25 "
+    "-c language_model_penalty_non_freq_dict_word=0.2"
 )
 
 
@@ -43,7 +49,7 @@ def _render_page(page: fitz.Page, dpi: int = DPI) -> np.ndarray:
 
 
 def _ocr_single(pil_img: Image.Image) -> str:
-    """Tesseract 단일 호출. 메모리 상에서 바로 전달."""
+    """Tesseract 단일 호출. kor+eng 실패 시 kor 폴백."""
     try:
         return pytesseract.image_to_string(
             pil_img,
@@ -51,6 +57,16 @@ def _ocr_single(pil_img: Image.Image) -> str:
             config=TESS_CONFIG,
         ).strip()
     except pytesseract.TesseractError as e:
+        if LANG == "kor+eng":
+            logging.warning("kor+eng 실패, kor 폴백: %s", str(e)[:100])
+            try:
+                return pytesseract.image_to_string(
+                    pil_img,
+                    lang="kor",
+                    config=TESS_CONFIG,
+                ).strip()
+            except pytesseract.TesseractError:
+                return ""
         logging.warning("Tesseract 오류: %s", str(e)[:200])
         return ""
     except Exception as e:
@@ -70,18 +86,22 @@ def _process_page_sync(
         logging.info("OCR page=%d 변환 직후 image.shape=%s dpi=%d", idx + 1, rgb.shape, DPI)
 
         preprocessed = preprocess_minimal(rgb)
-        pil_img = Image.fromarray(preprocessed)
 
-        text = _ocr_single(pil_img)
+        if HYBRID_OCR:
+            text = ocr_page_hybrid(preprocessed)
+        else:
+            pil_img = Image.fromarray(preprocessed)
+            text = _ocr_single(pil_img)
         text = correct_ocr_text(text)
 
         elapsed = time.perf_counter() - t0
         logging.info(
-            "OCR page=%d elapsed=%.2fs shape=%s dpi=%d psm=6",
+            "OCR page=%d elapsed=%.2fs shape=%s dpi=%d hybrid=%s",
             idx + 1,
             elapsed,
             preprocessed.shape,
             DPI,
+            HYBRID_OCR,
         )
         if elapsed > 3.0:
             logging.warning("OCR page=%d 병목: %.2fs > 3초", idx + 1, elapsed)
@@ -89,8 +109,8 @@ def _process_page_sync(
         ndjson = json.dumps({
             "page": idx + 1,
             "total": total,
-            "method": "ocr",
-            "psm_used": "6",
+            "method": "ocr_hybrid" if HYBRID_OCR else "ocr",
+            "psm_used": "3" if HYBRID_OCR else "6",
             "dpi": DPI,
             "elapsed_sec": round(elapsed, 2),
             "image_shape": list(preprocessed.shape),
@@ -127,7 +147,8 @@ async def extract_text_stream(
         "total": total,
         "method": "started",
         "dpi": DPI,
-        "psm": 6,
+        "psm": 3 if HYBRID_OCR else 6,
+        "hybrid": HYBRID_OCR,
     }) + "\n"
     await asyncio.sleep(0)
 
