@@ -1,9 +1,6 @@
-"""OCR 후처리: 노이즈 제거 + 한글 자모 조합 규칙 기반 보정.
+"""OCR 후처리: 노이즈 제거 + 잘못 나뉜 음절 병합 + 자모 규칙 기반 보정.
 
-사전 없이 한글 조합 구조(초성·중성·종성)를 분석하여,
-자모 위치별 혼동 규칙으로 보정. [원본:추출] = 정답:오인식.
-
-피드백: 성:섬, 익:의, 많:않, 페:폐
+의/익/폐/페 혼동은 LLM 단계에서 교정하므로 여기서는 미적용.
 """
 
 import re
@@ -60,21 +57,11 @@ def _correct_syllable_by_jamo(char: str) -> str:
     cho, jung, jong = parts
     jong_c = jong.strip() if jong else ""
 
-    # 1. 섬→성: ㅅ+ㅓ+ㅁ (종성 ㅇ↔ㅁ)
+    # 섬→성, 않→많 (의/익/폐/페는 LLM에서 교정)
     if cho == "ㅅ" and jung == "ㅓ" and jong_c == "ㅁ":
         return join_syllable("ㅅ", "ㅓ", "ㅇ")
-
-    # 2. 익→의: ㅇ+ㅣ+ㄱ (ㅡ+ㅣ vs ㅣ+ㄱ)
-    if cho == "ㅇ" and jung == "ㅣ" and jong_c == "ㄱ":
-        return join_syllable("ㅇ", "ㅢ", " ")
-
-    # 3. 않→많: ㅇ+ㅏ+ㄶ (초성 ㅇ↔ㅁ)
     if cho == "ㅇ" and jung == "ㅏ" and jong_c == "ㄶ":
         return join_syllable("ㅁ", "ㅏ", "ㄶ")
-
-    # 4. 페→폐: ㅍ+ㅔ (중성 ㅔ↔ㅖ)
-    if cho == "ㅍ" and jung == "ㅔ" and not jong_c:
-        return join_syllable("ㅍ", "ㅖ", " ")
 
     return char
 

@@ -1,14 +1,17 @@
-"""최소 전처리: Grayscale → CLAHE → Sharpen(획 구분) → Otsu → Morphology(끊긴 획) → 10px 테두리.
+"""최소 전처리: Grayscale → CLAHE → Sharpen → Otsu → Morphology → 10px 테두리.
 
 자모 혼동 완화: ㅇ/ㅁ(성↔섬, 많↔않), ㅔ/ㅖ(페↔폐), ㅡ+ㅣ/ㅣ+ㄱ(의↔익).
 """
 
+import os
 import cv2
 import numpy as np
 
 BORDER_PX = 10
 SHARPEN_STRENGTH = 0.55  # ㅇ/ㅁ, ㅔ/ㅖ 등 자모 경계 선명화 강화
 CLIP_LIMIT = 2.5  # CLAHE. 얇은 획(ㅖ 가로선 등) 보존
+UPSCALE_FACTOR = float(os.environ.get("OCR_UPSCALE", "1.5"))  # 1.5~2.0x. 획 보존
+USE_GRAY_INSTEAD_OF_OTSU = os.environ.get("OCR_USE_GRAY", "0").lower() in ("1", "true", "yes")
 
 
 def to_grayscale(img: np.ndarray) -> np.ndarray:
@@ -56,11 +59,25 @@ def add_ocr_border(img: np.ndarray, border_px: int = BORDER_PX, color: int = 255
     )
 
 
+def _upscale_for_stroke_preservation(img: np.ndarray, factor: float = UPSCALE_FACTOR) -> np.ndarray:
+    """300DPI 유지, 메모리에서만 resize. LSTM이 획을 더 잘 잡게 함. INTER_LANCZOS4 권장."""
+    if factor <= 1.0:
+        return img
+    h, w = img.shape[:2]
+    new_w, new_h = int(w * factor), int(h * factor)
+    return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+
+
 def preprocess_minimal(rgb: np.ndarray) -> np.ndarray:
-    """Grayscale → CLAHE → Sharpen → Otsu → Morphology → 10px 테두리."""
+    """Grayscale → CLAHE → Sharpen → Otsu(또는 gray) → Morphology → 10px 테두리."""
     gray = to_grayscale(rgb)
-    contrasted = _clahe_contrast(gray)
+    upscaled = _upscale_for_stroke_preservation(gray)
+    contrasted = _clahe_contrast(upscaled)
     sharpened = _sharpen_strokes(contrasted)
-    binary = otsu_binarize(sharpened)
-    connected = _morphology_connect_strokes(binary)
-    return add_ocr_border(connected)
+    if USE_GRAY_INSTEAD_OF_OTSU:
+        # 과한 이진화가 ㅢ/ㅔ를 망가뜨리는 경우가 있음. gray 그대로 시도.
+        processed = sharpened
+    else:
+        binary = otsu_binarize(sharpened)
+        processed = _morphology_connect_strokes(binary)
+    return add_ocr_border(processed)

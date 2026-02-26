@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 from typing import AsyncGenerator
 
 import fitz
@@ -26,12 +27,26 @@ pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
 
 DPI = 300
 LANG = "kor"
+
+# user_words, user_patterns (의/익/폐/페 문맥 보정)
+_CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config" / "tesseract"
+_USER_WORDS = _CONFIG_DIR / "user_words.txt"
+_USER_PATTERNS = _CONFIG_DIR / "user_patterns.txt"
+_user_config = ""
+if _USER_WORDS.exists():
+    _user_config += f" -c user_words_file={_USER_WORDS}"
+if _USER_PATTERNS.exists():
+    _user_config += f" -c user_patterns_file={_USER_PATTERNS}"
+
 TESS_CONFIG = (
     "--oem 1 --psm 6 "
     "-c preserve_interword_spaces=1 -c tessedit_do_invert=0 "
     "-c language_model_penalty_non_dict_word=0.25 "
     "-c language_model_penalty_non_freq_dict_word=0.2"
-)
+    f"{_user_config}"
+).strip()
+
+OCR_2PASS = os.environ.get("OCR_2PASS", "0").lower() in ("1", "true", "yes")
 
 
 def _render_page(page: fitz.Page, dpi: int = DPI) -> np.ndarray:
@@ -41,7 +56,13 @@ def _render_page(page: fitz.Page, dpi: int = DPI) -> np.ndarray:
 
 
 def _ocr_single(pil_img: Image.Image) -> str:
-    """Tesseract 단일 호출."""
+    """Tesseract 단일 호출. OCR_2PASS=1이면 저신뢰/의심 ROI 재시도."""
+    if OCR_2PASS:
+        from services.ocr.ocr_twopass import ocr_page_twopass
+        try:
+            return ocr_page_twopass(pil_img, TESS_CONFIG, LANG)
+        except Exception:
+            pass
     try:
         return pytesseract.image_to_string(
             pil_img, lang=LANG, config=TESS_CONFIG,
