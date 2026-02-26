@@ -21,7 +21,9 @@
     .progress-bar-segment.segment-working { background: #9ca3af; }
     .progress-bar-segment.segment-waiting { background: #e5e7eb; }
     .progress-label { font-size: 0.85rem; color: #666; }
-    .progress-time { font-size: 0.85rem; color: #444; font-variant-numeric: tabular-nums; }
+    .progress-stats { display: flex; align-items: center; gap: 1rem; font-variant-numeric: tabular-nums; }
+    .progress-average { font-size: 0.85rem; color: #666; }
+    .progress-time { font-size: 0.85rem; color: #444; }
     .progress-info { display: flex; justify-content: space-between; align-items: center; }
     .h-4 { height: 0.25rem; }
     .h-6 { height: 0.375rem; }
@@ -82,7 +84,10 @@
     <div class="h-4"></div>
     <div class="progress-info">
       <div class="progress-label" id="progressLabel">준비 중...</div>
-      <div class="progress-time" id="progressTime"></div>
+      <div class="progress-stats">
+        <span class="progress-average" id="progressAverage"></span>
+        <span class="progress-time" id="progressTime"></span>
+      </div>
     </div>
   </div>
 
@@ -126,6 +131,7 @@
     var progressWrap = document.getElementById('progressWrap');
     var progressSegments = document.getElementById('progressSegments');
     var progressLabel = document.getElementById('progressLabel');
+    var progressAverage = document.getElementById('progressAverage');
     var progressTime = document.getElementById('progressTime');
     var resultSection = document.getElementById('resultSection');
     var resultText = document.getElementById('resultText');
@@ -151,9 +157,24 @@
       return min + ':' + sec;
     }
 
+    function updateProgressAverage() {
+      var receivedCount = 0;
+      for (var i = 0; i < (totalPages || 0); i++) {
+        if (pageTexts[i] !== undefined) receivedCount++;
+      }
+      if (receivedCount > 0 && startTime > 0) {
+        var elapsed = Date.now() - startTime;
+        var avgMs = Math.round(elapsed / receivedCount);
+        progressAverage.textContent = '페이지당 평균 ' + formatMMSS(avgMs);
+      } else {
+        progressAverage.textContent = '';
+      }
+    }
+
     function startTimer() {
       stopTimer();
       startTime = Date.now();
+      progressAverage.textContent = '';
       progressTime.textContent = '경과 00:00';
 
       function tick() {
@@ -324,6 +345,7 @@
               for (var pi = 0; pi < totalPages; pi++) {
                 if (pageTexts[pi] === undefined) pageTexts[pi] = parts[pi] || '';
               }
+              updateProgressAverage();
               var receivedCount = 0;
               for (var pi = 0; pi < totalPages; pi++) {
                 if (pageTexts[pi] !== undefined) receivedCount++;
@@ -331,6 +353,7 @@
               if (receivedCount >= totalPages) {
                 stopTimer();
                 progressLabel.textContent = '완료!';
+                updateProgressAverage();
                 progressTime.textContent = '작업 완료 ' + formatMMSS(Date.now() - startTime);
               }
               renderProgressSegments();
@@ -363,6 +386,7 @@
                 pageTexts[data.page - 1] = data.text || '';
                 pageMethods[data.page - 1] = data.method || 'ocr';
                 totalPages = data.total || totalPages;
+                updateProgressAverage();
                 var receivedCount = 0;
                 for (var rj = 0; rj < totalPages; rj++) {
                   if (pageTexts[rj] !== undefined) receivedCount++;
@@ -370,6 +394,7 @@
                 if (totalPages > 0 && receivedCount >= totalPages) {
                   stopTimer();
                   progressLabel.textContent = '완료!';
+                  updateProgressAverage();
                   progressTime.textContent = '작업 완료 ' + formatMMSS(Date.now() - startTime);
                 }
                 if (totalPages > 1 && pageViewMode === 'all') {
