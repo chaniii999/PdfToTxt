@@ -26,30 +26,36 @@ _ASCII = re.compile(r"[a-zA-Z0-9]")
 _LETTER = re.compile(r"[a-zA-Z]")
 
 
-def _parse_image_to_data(data: str, level: int = 5) -> list[dict[str, Any]]:
-    """image_to_data TSV 파싱. level 5(단어) 또는 4(라인)."""
+def _parse_image_to_data_multi(data: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """한 번 파싱으로 level 5·4 모두 추출. (level5_items, level4_items) 반환."""
     lines = data.strip().split("\n")
+    items_5: list[dict[str, Any]] = []
+    items_4: list[dict[str, Any]] = []
     if not lines:
-        return []
-    items = []
+        return items_5, items_4
     for line in lines[1:]:
         parts = line.split("\t")
         if len(parts) < 12:
             continue
         try:
-            if int(parts[0]) != level:
+            lvl = int(parts[0])
+            if lvl not in (4, 5):
                 continue
             left, top = int(parts[6]), int(parts[7])
             w, h = int(parts[8]), int(parts[9])
             text = parts[11].strip()
-            items.append({
+            item = {
                 "block_num": int(parts[1]), "line_num": int(parts[2]), "word_num": int(parts[3]),
                 "left": left, "top": top, "width": w, "height": h,
                 "text": text,
-            })
+            }
+            if lvl == 5:
+                items_5.append(item)
+            else:
+                items_4.append(item)
         except (ValueError, IndexError):
             continue
-    return items
+    return items_5, items_4
 
 
 def _has_complete_syllable(text: str) -> bool:
@@ -158,9 +164,8 @@ def ocr_page_twostage(
     except Exception:
         return base_text
 
-    words = _parse_image_to_data(data, level=5)
-    if not words:
-        words = _parse_image_to_data(data, level=4)
+    words_5, words_4 = _parse_image_to_data_multi(data)
+    words = words_5 if words_5 else words_4
     if not words:
         return base_text
 

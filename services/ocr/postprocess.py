@@ -16,37 +16,48 @@ _CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config" / "postpr
 _TYPO_MAP_PATH = _CONFIG_DIR / "typo_map.txt"
 _PROHIBITED_PATH = _CONFIG_DIR / "prohibited_patterns.txt"
 
+# 페이지별 반복 로드 방지. 첫 호출 시 한 번만 로드
+_typo_map_cache: list[tuple[str, str]] | None = None
+_prohibited_cache: list[re.Pattern] | None = None
 
-def _load_typo_map() -> list[tuple[str, str]]:
-    """typo_map.txt 로드. wrong\tright. 긴 것 우선."""
+
+def _get_typo_map() -> list[tuple[str, str]]:
+    """typo_map.txt 로드. wrong\tright. 긴 것 우선. 모듈 캐시 사용."""
+    global _typo_map_cache
+    if _typo_map_cache is not None:
+        return _typo_map_cache
     pairs: list[tuple[str, str]] = []
-    if not _TYPO_MAP_PATH.exists():
-        return pairs
-    for line in _TYPO_MAP_PATH.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "\t" in line:
-            wrong, right = line.split("\t", 1)
-            if wrong and right:
-                pairs.append((wrong.strip(), right.strip()))
-    return sorted(pairs, key=lambda x: -len(x[0]))
+    if _TYPO_MAP_PATH.exists():
+        for line in _TYPO_MAP_PATH.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "\t" in line:
+                wrong, right = line.split("\t", 1)
+                if wrong and right:
+                    pairs.append((wrong.strip(), right.strip()))
+        pairs = sorted(pairs, key=lambda x: -len(x[0]))
+    _typo_map_cache = pairs
+    return _typo_map_cache
 
 
-def _load_prohibited_patterns() -> list[re.Pattern]:
-    """금지 패턴 로드."""
+def _get_prohibited_patterns() -> list[re.Pattern]:
+    """금지 패턴 로드. 모듈 캐시 사용."""
+    global _prohibited_cache
+    if _prohibited_cache is not None:
+        return _prohibited_cache
     patterns: list[re.Pattern] = []
-    if not _PROHIBITED_PATH.exists():
-        return patterns
-    for line in _PROHIBITED_PATH.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        try:
-            patterns.append(re.compile(line))
-        except re.error:
-            logging.warning("postprocess: 잘못된 금지 패턴 무시: %s", line[:50])
-    return patterns
+    if _PROHIBITED_PATH.exists():
+        for line in _PROHIBITED_PATH.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                patterns.append(re.compile(line))
+            except re.error:
+                logging.warning("postprocess: 잘못된 금지 패턴 무시: %s", line[:50])
+    _prohibited_cache = patterns
+    return _prohibited_cache
 
 
 # === 1. 오인식 패턴 치환 ===
@@ -87,7 +98,7 @@ def _apply_stage1_patterns(text: str) -> str:
     result = _merge_broken_syllables(result)
     for pattern, replacement in _REGEX_PATTERNS:
         result = pattern.sub(replacement, result)
-    return _remove_noise_lines(result)
+    return result
 
 
 # === 2. 사전 기반 보정 ===
@@ -124,12 +135,10 @@ def correct_ocr_text(text: str) -> str:
     result = _apply_stage1_patterns(text)
 
     # 2. 사전 기반 보정
-    typo_map = _load_typo_map()
-    result = _apply_stage2_dict(result, typo_map)
+    result = _apply_stage2_dict(result, _get_typo_map())
 
     # 3. 금지 패턴 탐지 (로깅)
-    prohibited = _load_prohibited_patterns()
-    result, _ = _apply_stage3_prohibited(result, prohibited)
+    result, _ = _apply_stage3_prohibited(result, _get_prohibited_patterns())
 
     # 4. 세그먼트 파손 복구 (줄바꿈/괄호/영문 약어)
     norm, flags, diff_log = normalize_text(result)

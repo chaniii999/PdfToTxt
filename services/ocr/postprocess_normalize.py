@@ -249,11 +249,11 @@ RULES: list[NormalizeRule] = [
 def _apply_rule(
     text: str,
     rule: NormalizeRule,
-    diff_log: list[DiffEntry],
+    diff_log: list[DiffEntry] | None,
 ) -> str:
-    """규칙 적용 후 diff 로그 기록."""
+    """규칙 적용. diff_log가 None이 아니면 변경 시 로그 기록."""
     after = rule.apply_fn(text)
-    if after != text:
+    if diff_log is not None and after != text:
         diff_log.append(
             DiffEntry(rule_id=rule.rule_id, before=text[:200], after=after[:200])
         )
@@ -277,26 +277,34 @@ def _check_guardrail(
     return True, None
 
 
-def normalize_text(text: str) -> tuple[str, list[str], list[DiffEntry]]:
+def normalize_text(
+    text: str,
+    collect_diff: bool = False,
+) -> tuple[str, list[str], list[DiffEntry]]:
     """
     Post-OCR 세그먼트 파손 복구 정규화.
 
     적용 순서: NFC → 줄바꿈 복구 → 괄호 내부 정제 → 토큰 치환 → 가드레일
 
+    Args:
+        text: 입력 텍스트
+        collect_diff: True면 diff_log 수집 (디버깅용). 기본 False로 추출 속도 우선.
+
     Returns:
         (normalized_text, flags, diff_log)
     """
     flags: list[str] = []
-    diff_log: list[DiffEntry] = []
+    diff_log: list[DiffEntry] = [] if collect_diff else []
 
     if not text or not text.strip():
         return text, flags, diff_log
 
     original_lines = text.split("\n")
     result = text
+    log = diff_log if collect_diff else None
 
     for rule in RULES:
-        result = _apply_rule(result, rule, diff_log)
+        result = _apply_rule(result, rule, log)
 
     result_lines = result.split("\n")
     for i, (orig, res) in enumerate(zip(original_lines, result_lines)):

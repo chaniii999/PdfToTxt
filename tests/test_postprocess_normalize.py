@@ -84,7 +84,7 @@ class TestNormalizeText(unittest.TestCase):
     def test_diff_log_structure(self) -> None:
         """diff 로그에 rule_id, before, after 포함."""
         inp = "스\n스로"
-        out, flags, log = normalize_text(inp)
+        out, flags, log = normalize_text(inp, collect_diff=True)
         assert len(log) >= 1
         for entry in log:
             assert isinstance(entry, DiffEntry)
