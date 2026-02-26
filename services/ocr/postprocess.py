@@ -1,28 +1,59 @@
-"""OCR 후처리: 노이즈 제거 + 잘못 나뉜 음절 병합 + 자모 규칙 기반 보정.
+"""Post-OCR 텍스트 정규화 파이프라인.
 
-의/익/폐/페 혼동은 LLM 단계에서 교정하므로 여기서는 미적용.
+1. 오인식 패턴 치환 (자주 발생하는 wrong→right)
+2. 사전 기반 보정 (typo_map.txt)
+3. 금지 단어 패턴 탐지 (로깅/플래그)
 """
 
+import logging
 import re
+from pathlib import Path
 
-from services.ocr.jamo import split_syllable, join_syllable, is_hangul_syllable
+_CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config" / "postprocess"
+_TYPO_MAP_PATH = _CONFIG_DIR / "typo_map.txt"
+_PROHIBITED_PATH = _CONFIG_DIR / "prohibited_patterns.txt"
 
+
+def _load_typo_map() -> list[tuple[str, str]]:
+    """typo_map.txt 로드. wrong\tright. 긴 것 우선."""
+    pairs: list[tuple[str, str]] = []
+    if not _TYPO_MAP_PATH.exists():
+        return pairs
+    for line in _TYPO_MAP_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "\t" in line:
+            wrong, right = line.split("\t", 1)
+            if wrong and right:
+                pairs.append((wrong.strip(), right.strip()))
+    return sorted(pairs, key=lambda x: -len(x[0]))
+
+
+def _load_prohibited_patterns() -> list[re.Pattern]:
+    """금지 패턴 로드."""
+    patterns: list[re.Pattern] = []
+    if not _PROHIBITED_PATH.exists():
+        return patterns
+    for line in _PROHIBITED_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            patterns.append(re.compile(line))
+        except re.error:
+            logging.warning("postprocess: 잘못된 금지 패턴 무시: %s", line[:50])
+    return patterns
+
+
+# === 1. 오인식 패턴 치환 ===
 
 def _merge_broken_syllables(text: str) -> str:
-    """
-    OCR이 줄바꿈/공백으로 한글 음절을 잘못 나눈 경우 복원.
-    예: "경\\n우" → "경우", "경  우" → "경우"
-    조건: 한글 + (줄바꿈 또는 2칸 이상 공백) + 한글, 두 음절이 다를 때만 병합.
-    """
+    """한글+줄바꿈/공백+한글 복원. 경\\n우 → 경우."""
     def repl(m: re.Match) -> str:
-        left, sep, right = m.group(1), m.group(2), m.group(3)
-        if left != right:
-            return left + right
-        return m.group(0)
-
-    # 한글 + (줄바꿈 또는 2칸 이상 공백) + 한글. 1칸 공백은 제외(할 수 등 정상 띄어쓰기 보존)
-    pattern = re.compile(r"([가-힣])(\n|\s{2,})([가-힣])")
-    return pattern.sub(repl, text)
+        left, right = m.group(1), m.group(3)
+        return left + right if left != right else m.group(0)
+    return re.sub(r"([가-힣])(\n|\s{2,})([가-힣])", repl, text)
 
 
 def _remove_noise_lines(text: str) -> str:
@@ -40,44 +71,6 @@ def _remove_noise_lines(text: str) -> str:
     return "\n".join(kept)
 
 
-def _correct_syllable_by_jamo(char: str) -> str:
-    """
-    한글 음절 1개를 자모 구조 기반 혼동 규칙으로 보정.
-    [원본:추출] = 정답:오인식. 추출(OCR) → 원본(정답) 방향으로만 적용.
-
-    혼동 원인 (자모 구조):
-    - 성:섬 — 종성 ㅇ↔ㅁ (닫힌 형태. ㅇ=원, ㅁ=사각)
-    - 익:의 — ㅇ+ㅣ+ㄱ vs ㅇ+ㅢ (ㅡ+ㅣ). ㅡ 약하면 ㄱ처럼 보임
-    - 많:않 — 초성 ㅁ↔ㅇ (많=ㅁ+ㅏ+ㄶ, 않=ㅇ+ㅏ+ㄶ)
-    - 페:폐 — 중성 ㅔ↔ㅖ (ㅔ=ㅓ+ㅣ, ㅖ=ㅕ+ㅣ. 가로획 유무)
-    """
-    parts = split_syllable(char)
-    if not parts:
-        return char
-    cho, jung, jong = parts
-    jong_c = jong.strip() if jong else ""
-
-    # 섬→성, 않→많 (의/익/폐/페는 LLM에서 교정)
-    if cho == "ㅅ" and jung == "ㅓ" and jong_c == "ㅁ":
-        return join_syllable("ㅅ", "ㅓ", "ㅇ")
-    if cho == "ㅇ" and jung == "ㅏ" and jong_c == "ㄶ":
-        return join_syllable("ㅁ", "ㅏ", "ㄶ")
-
-    return char
-
-
-def _apply_jamo_correction(text: str) -> str:
-    """텍스트 내 한글 음절을 자모 규칙으로 순회 보정."""
-    result = []
-    for char in text:
-        if is_hangul_syllable(char):
-            result.append(_correct_syllable_by_jamo(char))
-        else:
-            result.append(char)
-    return "".join(result)
-
-
-# 정규식: 숫자·기호 복원 (자모와 무관)
 _REGEX_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(?<=\d)O(?=\d)"), "0"),
     (re.compile(r"(?<=\d)I(?=\d)"), "1"),
@@ -85,13 +78,54 @@ _REGEX_PATTERNS: list[tuple[re.Pattern, str]] = [
 ]
 
 
-def correct_ocr_text(text: str) -> str:
-    """OCR 결과 후처리: 노이즈 제거 + 잘못 나뉜 음절 병합 + 자모 규칙 기반 보정."""
-    if not text or not text.strip():
-        return text
+def _apply_stage1_patterns(text: str) -> str:
+    """1단계: 오인식 패턴 치환 (기본 규칙 + regex)."""
     result = _remove_noise_lines(text)
     result = _merge_broken_syllables(result)
-    result = _apply_jamo_correction(result)
     for pattern, replacement in _REGEX_PATTERNS:
         result = pattern.sub(replacement, result)
     return _remove_noise_lines(result)
+
+
+# === 2. 사전 기반 보정 ===
+
+def _apply_stage2_dict(text: str, typo_map: list[tuple[str, str]]) -> str:
+    """2단계: config/postprocess/typo_map.txt 기반 치환."""
+    for wrong, right in typo_map:
+        text = text.replace(wrong, right)
+    return text
+
+
+# === 3. 금지 단어 패턴 탐지 ===
+
+def _apply_stage3_prohibited(text: str, patterns: list[re.Pattern]) -> tuple[str, list[str]]:
+    """3단계: 금지 패턴 탐지. (텍스트, 탐지된 패턴 목록) 반환."""
+    detected: list[str] = []
+    for line in text.splitlines():
+        for pat in patterns:
+            if pat.search(line):
+                detected.append(line[:80] + "..." if len(line) > 80 else line)
+                break
+    # 현재는 로깅만. 필요 시 마스킹/제거 로직 추가
+    if detected:
+        logging.debug("postprocess: 금지 패턴 탐지 %d건", len(detected))
+    return text, detected
+
+
+def correct_ocr_text(text: str) -> str:
+    """Post-OCR 정제 파이프라인."""
+    if not text or not text.strip():
+        return text
+
+    # 1. 오인식 패턴 치환
+    result = _apply_stage1_patterns(text)
+
+    # 2. 사전 기반 보정
+    typo_map = _load_typo_map()
+    result = _apply_stage2_dict(result, typo_map)
+
+    # 3. 금지 패턴 탐지 (로깅)
+    prohibited = _load_prohibited_patterns()
+    result, _ = _apply_stage3_prohibited(result, prohibited)
+
+    return result

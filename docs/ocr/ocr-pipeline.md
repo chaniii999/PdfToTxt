@@ -45,7 +45,10 @@ PDF가 업로드되면 바이트를 받아 `extract_text_stream`으로 진입한
 
 **점수 부족 시**: enhance(sharpen 0.9 + CLAHE)를 시도하고, 이어서 preset D → A → B → C 순으로 `preprocess_for_ocr`를 적용한 뒤 각각 Tesseract를 돌린다. 기존 `best`보다 점수가 높으면 `best`를 갱신한다.
 
-**후처리**: `correct_ocr_text` — 오탈자사전 기반 오인식 치환 (0!!→PII, 표준만→표준안, 개민→개인 등).
+**후처리**: `correct_ocr_text` — Post-OCR 정제 3단계:
+1. 오인식 패턴 치환 (노이즈 제거, 음절 병합, 자모 보정, O→0 등)
+2. 사전 기반 보정 (`config/postprocess/typo_map.txt`)
+3. 금지 패턴 탐지 (`config/postprocess/prohibited_patterns.txt`, 로깅)
 
 - **언어**: kor+eng
 - **출력**: `image_to_string` 사용 (띄어쓰기 유지. `image_to_data`는 한글에서 글자 단위로 나와 띄어쓰기가 깨진다.)
@@ -75,7 +78,7 @@ enhance → preset D → A → B → C 추가 시도 → best 갱신
     ↓
 길이×(0.2+0.8×한글비율) 최대값 = 최종 텍스트
     ↓
-correct_ocr_text (오탈자사전 치환)
+correct_ocr_text (Post-OCR 정제 3단계)
     ↓
 NDJSON 스트리밍 반환
 ```
