@@ -48,6 +48,15 @@ TESS_CONFIG = (
 
 OCR_2PASS = os.environ.get("OCR_2PASS", "0").lower() in ("1", "true", "yes")
 
+# 디지털 PDF 판별: 텍스트 레이어 단어 수 임계값
+_DIRECT_WORD_MIN = 10
+
+
+def _is_digital_page(page: fitz.Page) -> bool:
+    """텍스트 레이어가 충분하면 디지털 PDF로 판별."""
+    words = page.get_text("words")
+    return len(words) >= _DIRECT_WORD_MIN
+
 
 def _render_page(page: fitz.Page, dpi: int = DPI) -> np.ndarray:
     """페이지를 RGB numpy array로 렌더링."""
@@ -71,23 +80,35 @@ def _ocr_single(pil_img: Image.Image) -> str:
         return ""
 
 
-def _process_page_sync(page: fitz.Page, idx: int, total: int) -> tuple[str, str]:
-    """단일 페이지 처리. (NDJSON 줄, 텍스트) 반환."""
+def _process_page_sync(
+    page: fitz.Page, idx: int, total: int, force_ocr: bool = False
+) -> tuple[str, str, str]:
+    """단일 페이지 처리. (NDJSON 줄, 텍스트, method) 반환. method: direct | ocr | error."""
     try:
-        rgb = _render_page(page)
-        preprocessed = preprocess_minimal(rgb)
-        pil_img = Image.fromarray(preprocessed)
-        text = _ocr_single(pil_img)
-        text = correct_ocr_text(text)
+        if force_ocr:
+            use_ocr = True
+        else:
+            use_ocr = not _is_digital_page(page)
+
+        if use_ocr:
+            rgb = _render_page(page)
+            preprocessed = preprocess_minimal(rgb)
+            pil_img = Image.fromarray(preprocessed)
+            text = _ocr_single(pil_img)
+            text = correct_ocr_text(text)
+            method = "ocr"
+        else:
+            text = page.get_text().strip()
+            method = "direct"
 
         ndjson = json.dumps({
             "page": idx + 1,
             "total": total,
-            "method": "ocr",
-            "dpi": DPI,
+            "method": method,
+            "dpi": DPI if use_ocr else None,
             "text": text,
         }) + "\n"
-        return ndjson, text
+        return ndjson, text, method
     except Exception as err:
         ndjson = json.dumps({
             "page": idx + 1,
@@ -96,14 +117,15 @@ def _process_page_sync(page: fitz.Page, idx: int, total: int) -> tuple[str, str]
             "error": str(err)[:200],
             "text": "",
         }) + "\n"
-        return ndjson, ""
+        return ndjson, "", "error"
 
 
 async def extract_text_stream(
     pdf_bytes: bytes,
     force_ocr: bool | None = None,
 ) -> AsyncGenerator[str, None]:
-    """페이지별 NDJSON 스트리밍."""
+    """페이지별 NDJSON 스트리밍. force_ocr=True면 모든 페이지 OCR 강제."""
+    force = force_ocr or False
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     total = len(doc)
     all_parts: list[str] = []
@@ -115,11 +137,11 @@ async def extract_text_stream(
     try:
         for idx in range(total):
             page = doc[idx]
-            ndjson_line, text = await asyncio.to_thread(
-                _process_page_sync, page, idx, total
+            ndjson_line, text, method = await asyncio.to_thread(
+                _process_page_sync, page, idx, total, force
             )
             all_parts.append(text)
-            all_methods.append(f"p{idx + 1}:ocr")
+            all_methods.append(f"p{idx + 1}:{method}")
             yield ndjson_line
             await asyncio.sleep(0)
     finally:
