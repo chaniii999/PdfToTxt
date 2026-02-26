@@ -14,10 +14,10 @@
     .progress-wrap { display: none; }
     .progress-bar-bg { width: 100%; height: 24px; background: #e0e0e0; border-radius: 4px; overflow: hidden; display: flex; }
     .progress-bar-segments { display: flex; width: 100%; height: 100%; gap: 1px; }
-    .progress-bar-segment { flex: 1; min-width: 2px; border-radius: 2px; transition: background 0.2s ease; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-    .progress-bar-segment .segment-label { font-size: 0.55rem; color: #fff; text-shadow: 0 0 1px #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-    .progress-bar-segment.segment-waiting .segment-label { color: #6b7280; }
+    .progress-bar-segment { flex: 1; min-width: 2px; border-radius: 2px; transition: background 0.2s ease; }
     .progress-bar-segment.segment-done { background: #22c55e; }
+    .progress-bar-segment.segment-done-direct { background: #3b82f6; }
+    .progress-bar-segment.segment-done-error { background: #f59e0b; }
     .progress-bar-segment.segment-working { background: #9ca3af; }
     .progress-bar-segment.segment-waiting { background: #e5e7eb; }
     .progress-label { font-size: 0.85rem; color: #666; }
@@ -240,27 +240,20 @@
       for (var i = 0; i < total; i++) {
         var seg = document.createElement('div');
         seg.className = 'progress-bar-segment';
-        var label = '';
-        var title = '페이지 ' + (i + 1);
+        var m = pageMethods[i] || '';
+        var titleSuffix = '';
         if (pageTexts[i] !== undefined) {
-          seg.classList.add('segment-done');
-          var m = pageMethods[i] || 'ocr';
-          label = getMethodLabel(m);
-          title += ': ' + (m === 'direct' ? '직접 추출' : m === 'ocr' ? 'OCR' : '오류');
+          if (m === 'direct') { seg.classList.add('segment-done-direct'); titleSuffix = '직접'; }
+          else if (m === 'error') { seg.classList.add('segment-done-error'); titleSuffix = '오류'; }
+          else { seg.classList.add('segment-done'); titleSuffix = 'OCR'; }
         } else if (pageStarted[i]) {
           seg.classList.add('segment-working');
-          label = '추출중';
-          title += ': 추출중';
+          titleSuffix = '추출중';
         } else {
           seg.classList.add('segment-waiting');
-          label = '대기';
-          title += ': 대기중';
+          titleSuffix = '대기중';
         }
-        seg.title = title;
-        var span = document.createElement('span');
-        span.className = 'segment-label';
-        span.textContent = label;
-        seg.appendChild(span);
+        seg.title = '페이지 ' + (i + 1) + ': ' + titleSuffix;
         progressSegments.appendChild(seg);
       }
     }
