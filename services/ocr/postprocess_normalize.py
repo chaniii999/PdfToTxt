@@ -48,6 +48,24 @@ def _apply_nfc(text: str) -> str:
     return unicodedata.normalize("NFC", text)
 
 
+# OCR이 공백을 ·(U+00B7)로 오인식하는 패턴. 단어 사이 · → 공백
+SPACE_DOT_PATTERN = re.compile(
+    r"([가-힣A-Za-z0-9])\s*[·∙]\s*([가-힣A-Za-z0-9])"
+)
+
+
+def _fix_space_dot(text: str) -> str:
+    """단어 사이 ·(중점)를 공백으로 치환. OCR 공백 오인식 보정."""
+    def repl(m: re.Match) -> str:
+        return m.group(1) + " " + m.group(2)
+
+    prev = ""
+    while prev != text:
+        prev = text
+        text = SPACE_DOT_PATTERN.sub(repl, text)
+    return text
+
+
 def _remove_bullet_lines(text: str) -> str:
     """단독 기호/불릿 라인 제거."""
     lines = text.split("\n")
@@ -175,6 +193,13 @@ RULES: list[NormalizeRule] = [
         condition="항상 적용",
         example="자모 분리 한글 → NFC 결합형",
         apply_fn=_apply_nfc,
+    ),
+    NormalizeRule(
+        rule_id="space_dot_fix",
+        description="단어 사이 ·(중점) → 공백 치환",
+        condition="OCR 공백 오인식 보정",
+        example="단어·단어 → 단어 단어",
+        apply_fn=_fix_space_dot,
     ),
     NormalizeRule(
         rule_id="bullet_remove",
