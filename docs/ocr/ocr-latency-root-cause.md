@@ -109,10 +109,9 @@ OCR_UPSCALE=1.0      # 1.5→1.0 (가장 효과 큼)
 - `tessdata_fast`: 속도 우선
 - `tessdata`: 기본
 
-### 4.5 eng ROI 배치/병렬 (구조 변경)
+### 4.5 eng ROI 배치 (구조 변경)
 
 - ROI crop들을 한 이미지로 합쳐 1회 eng OCR 후 bbox로 분리
-- 또는 ProcessPoolExecutor로 ROI별 병렬 eng OCR
 - 구현 난이도 높음
 
 ---
