@@ -134,9 +134,6 @@
 
     var startTime = 0;
     var timerInterval = null;
-    var lastEstimate = '--:--';
-    var lastPage = 0;
-    var lastTotal = 0;
     var rawExtractedText = '';
     var pageTexts = [];
     var pageMethods = [];
@@ -153,29 +150,17 @@
       return min + ':' + sec;
     }
 
-    function estimateRemaining(elapsed, page, total) {
-      if (page <= 0 || total <= 0 || page >= total) return '--:--';
-      var perPage = elapsed / page;
-      var remaining = perPage * (total - page);
-      return formatMMSS(Math.max(0, remaining));
-    }
-
     function startTimer() {
-      if (timerInterval) {
-        clearTimeout(timerInterval);
-        timerInterval = null;
-      }
+      stopTimer();
       startTime = Date.now();
-      lastEstimate = '--:--';
-      lastPage = 0;
-      lastTotal = 0;
-      progressTime.textContent = '경과 00:00 | 예상 --:--';
+      progressTime.textContent = '경과 00:00';
+
       function tick() {
-        var elapsed = Date.now() - startTime;
-        progressTime.textContent = '경과 ' + formatMMSS(elapsed) + ' | 예상 ' + lastEstimate;
-        timerInterval = setTimeout(tick, 100);
+        if (!startTime) return;
+        progressTime.textContent = '경과 ' + formatMMSS(Date.now() - startTime);
+        timerInterval = setTimeout(tick, 1000);
       }
-      timerInterval = setTimeout(tick, 0);
+      timerInterval = setTimeout(tick, 1000);
     }
 
     function stopTimer() {
@@ -183,17 +168,6 @@
         clearTimeout(timerInterval);
         timerInterval = null;
       }
-    }
-
-    function updateTimerWithEstimate(page, total) {
-      var elapsed = Date.now() - startTime;
-      var est = estimateRemaining(elapsed, page, total);
-      if (page > 0 && total > 0 && est !== '--:--') {
-        lastEstimate = est;
-        lastPage = page;
-        lastTotal = total;
-      }
-      progressTime.textContent = '경과 ' + formatMMSS(elapsed) + ' | 예상 ' + lastEstimate;
     }
 
     function showError(message) {
@@ -304,7 +278,6 @@
       var pct = total ? Math.round((page / total) * 100) : 0;
       var methodLabel = method === 'direct' ? '직접 추출' : method === 'error' ? '오류(건너뜀)' : 'OCR';
       progressLabel.textContent = page + ' / ' + total + ' 페이지 (' + methodLabel + ') — ' + pct + '%';
-      updateTimerWithEstimate(page, total);
     }
 
     async function handleUploadClick() {
@@ -354,13 +327,22 @@
             var data = JSON.parse(line);
 
             if (data.done) {
-              stopTimer();
-              var totalElapsed = Date.now() - startTime;
               totalPages = data.total || pageTexts.length || 1;
-              renderProgressSegments();
-              progressLabel.textContent = '완료!';
-              progressTime.textContent = '작업 완료 ' + formatMMSS(totalElapsed);
               rawExtractedText = data.text || '(텍스트 없음)';
+              var parts = rawExtractedText.split(/\n\n+/);
+              for (var pi = 0; pi < totalPages; pi++) {
+                if (pageTexts[pi] === undefined) pageTexts[pi] = parts[pi] || '';
+              }
+              var receivedCount = 0;
+              for (var pi = 0; pi < totalPages; pi++) {
+                if (pageTexts[pi] !== undefined) receivedCount++;
+              }
+              if (receivedCount >= totalPages) {
+                stopTimer();
+                progressLabel.textContent = '완료!';
+                progressTime.textContent = '작업 완료 ' + formatMMSS(Date.now() - startTime);
+              }
+              renderProgressSegments();
               resultText.textContent = rawExtractedText;
               methodInfo.textContent = data.methods ? '추출 방식: ' + data.methods.join(', ') : '';
               document.getElementById('accuracyResult').hidden = true;
@@ -390,6 +372,15 @@
                 pageTexts[data.page - 1] = data.text || '';
                 pageMethods[data.page - 1] = data.method || 'ocr';
                 totalPages = data.total || totalPages;
+                var receivedCount = 0;
+                for (var rj = 0; rj < totalPages; rj++) {
+                  if (pageTexts[rj] !== undefined) receivedCount++;
+                }
+                if (totalPages > 0 && receivedCount >= totalPages) {
+                  stopTimer();
+                  progressLabel.textContent = '완료!';
+                  progressTime.textContent = '작업 완료 ' + formatMMSS(Date.now() - startTime);
+                }
                 if (totalPages > 1 && pageViewMode === 'all') {
                   pageViewMode = 'page';
                   document.getElementById('pageViewBtn').hidden = false;

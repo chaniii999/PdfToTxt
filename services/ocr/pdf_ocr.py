@@ -3,7 +3,7 @@
 import asyncio
 import json
 import os
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -157,11 +157,17 @@ def _process_page_worker(args: tuple) -> tuple[str, str, str]:
 
 def _run_pages_parallel(
     pdf_bytes: bytes, total: int, force_ocr: bool, max_workers: int
-) -> list[tuple[str, str, str]]:
-    """ProcessPoolExecutor로 페이지 병렬 처리. 결과는 페이지 순서 유지."""
+) -> list[tuple[int, str, str, str]]:
+    """ProcessPoolExecutor로 페이지 병렬 처리. 완료 순서대로 (idx, ndjson, text, method) 반환."""
     tasks = [(pdf_bytes, idx, total, force_ocr) for idx in range(total)]
+    out: list[tuple[int, str, str, str]] = []
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        return list(ex.map(_process_page_worker, tasks, chunksize=1))
+        future_to_idx = {ex.submit(_process_page_worker, t): i for i, t in enumerate(tasks)}
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            ndjson_line, text, method = future.result()
+            out.append((idx, ndjson_line, text, method))
+    return out
 
 
 async def extract_text_stream(
@@ -190,14 +196,27 @@ async def extract_text_stream(
         )
         if use_parallel:
             workers = min(OCR_MAX_WORKERS, total)
-            results = await asyncio.to_thread(
-                _run_pages_parallel, pdf_bytes, total, force, workers
-            )
-            for ndjson_line, text, method in results:
-                all_parts.append(text)
-                all_methods.append(f"p{len(all_parts)}:{method}")
-                yield ndjson_line
-                await asyncio.sleep(0)
+            all_parts = [""] * total
+            all_methods = [""] * total
+            tasks = [(pdf_bytes, idx, total, force) for idx in range(total)]
+            loop = asyncio.get_event_loop()
+            with ProcessPoolExecutor(max_workers=workers) as ex:
+                future_to_idx = {
+                    loop.run_in_executor(ex, _process_page_worker, t): i
+                    for i, t in enumerate(tasks)
+                }
+                pending = set(future_to_idx.keys())
+                while pending:
+                    done, pending = await asyncio.wait(
+                        pending, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for fut in done:
+                        idx = future_to_idx[fut]
+                        ndjson_line, text, method = fut.result()
+                        all_parts[idx] = text
+                        all_methods[idx] = f"p{idx + 1}:{method}"
+                        yield ndjson_line
+                        await asyncio.sleep(0)
         else:
             for idx in range(total):
                 page = doc[idx]
@@ -213,6 +232,7 @@ async def extract_text_stream(
 
     yield json.dumps({
         "done": True,
+        "total": total,
         "text": "\n\n".join(all_parts) if all_parts else "",
         "methods": [m for m in all_methods if m],
     }) + "\n"
