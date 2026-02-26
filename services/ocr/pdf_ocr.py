@@ -3,12 +3,10 @@
 import asyncio
 import json
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import AsyncGenerator
 
 import fitz
-import cv2
 import numpy as np
 from PIL import Image
 import pytesseract
@@ -53,10 +51,8 @@ TESS_CONFIG = (
 
 OCR_2PASS = os.environ.get("OCR_2PASS", "0").lower() in ("1", "true", "yes")
 
-# 멀티프로세싱: i5-6600(4코어) 기준 3 workers. Tesseract는 subprocess라 코어당 1개.
-_CPU_COUNT = os.cpu_count() or 4
-OCR_MAX_WORKERS = int(os.environ.get("OCR_MAX_WORKERS", "0")) or max(1, min(3, _CPU_COUNT))
-OCR_USE_MULTIPROCESS = os.environ.get("OCR_USE_MULTIPROCESS", "1").lower() in ("1", "true", "yes")
+# Tesseract 호출 타임아웃(초). 0=무제한. 특정 페이지 무한 대기 방지.
+OCR_TESSERACT_TIMEOUT = int(os.environ.get("OCR_TESSERACT_TIMEOUT", "120"))
 
 # 디지털 PDF 판별: 텍스트 레이어 단어 수 임계값
 _DIRECT_WORD_MIN = 10
@@ -96,6 +92,7 @@ def _ocr_single(pil_img: Image.Image, rgb_original: np.ndarray | None = None) ->
     try:
         return pytesseract.image_to_string(
             pil_img, lang=LANG, config=TESS_CONFIG,
+            timeout=OCR_TESSERACT_TIMEOUT if OCR_TESSERACT_TIMEOUT > 0 else 0,
         ).strip()
     except Exception:
         return ""
@@ -141,35 +138,6 @@ def _process_page_sync(
         return ndjson, "", "error"
 
 
-def _process_page_worker(args: tuple) -> tuple[str, str, str]:
-    """
-    ProcessPoolExecutor용 워커. PDF 바이트·인덱스만 전달 (pickle 가능).
-    프로세스당 독립 Tesseract subprocess 실행.
-    """
-    pdf_bytes, idx, total, force_ocr = args
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    try:
-        page = doc[idx]
-        return _process_page_sync(page, idx, total, force_ocr)
-    finally:
-        doc.close()
-
-
-def _run_pages_parallel(
-    pdf_bytes: bytes, total: int, force_ocr: bool, max_workers: int
-) -> list[tuple[int, str, str, str]]:
-    """ProcessPoolExecutor로 페이지 병렬 처리. 완료 순서대로 (idx, ndjson, text, method) 반환."""
-    tasks = [(pdf_bytes, idx, total, force_ocr) for idx in range(total)]
-    out: list[tuple[int, str, str, str]] = []
-    with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        future_to_idx = {ex.submit(_process_page_worker, t): i for i, t in enumerate(tasks)}
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            ndjson_line, text, method = future.result()
-            out.append((idx, ndjson_line, text, method))
-    return out
-
-
 async def extract_text_stream(
     pdf_bytes: bytes,
     force_ocr: bool | None = None,
@@ -181,52 +149,27 @@ async def extract_text_stream(
     all_parts: list[str] = []
     all_methods: list[str] = []
 
-    workers = min(OCR_MAX_WORKERS, total) if (OCR_USE_MULTIPROCESS and total >= 2) else 1
     yield json.dumps({
         "page": 0, "total": total, "method": "started", "dpi": DPI, "psm": 6,
-        "workers": workers if OCR_USE_MULTIPROCESS else None,
     }) + "\n"
     await asyncio.sleep(0)
 
     try:
-        use_parallel = (
-            OCR_USE_MULTIPROCESS
-            and total >= 2
-            and OCR_MAX_WORKERS >= 2
-        )
-        if use_parallel:
-            workers = min(OCR_MAX_WORKERS, total)
-            all_parts = [""] * total
-            all_methods = [""] * total
-            tasks = [(pdf_bytes, idx, total, force) for idx in range(total)]
-            loop = asyncio.get_event_loop()
-            with ProcessPoolExecutor(max_workers=workers) as ex:
-                future_to_idx = {
-                    loop.run_in_executor(ex, _process_page_worker, t): i
-                    for i, t in enumerate(tasks)
-                }
-                pending = set(future_to_idx.keys())
-                while pending:
-                    done, pending = await asyncio.wait(
-                        pending, return_when=asyncio.FIRST_COMPLETED
-                    )
-                    for fut in done:
-                        idx = future_to_idx[fut]
-                        ndjson_line, text, method = fut.result()
-                        all_parts[idx] = text
-                        all_methods[idx] = f"p{idx + 1}:{method}"
-                        yield ndjson_line
-                        await asyncio.sleep(0)
-        else:
-            for idx in range(total):
-                page = doc[idx]
-                ndjson_line, text, method = await asyncio.to_thread(
-                    _process_page_sync, page, idx, total, force
-                )
-                all_parts.append(text)
-                all_methods.append(f"p{idx + 1}:{method}")
-                yield ndjson_line
-                await asyncio.sleep(0)
+        for idx in range(total):
+            page = doc[idx]
+            yield json.dumps({
+                "page": idx + 1,
+                "total": total,
+                "method": "started",
+            }) + "\n"
+            await asyncio.sleep(0)
+            ndjson_line, text, method = await asyncio.to_thread(
+                _process_page_sync, page, idx, total, force
+            )
+            all_parts.append(text)
+            all_methods.append(f"p{idx + 1}:{method}")
+            yield ndjson_line
+            await asyncio.sleep(0)
     finally:
         doc.close()
 

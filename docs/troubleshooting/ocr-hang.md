@@ -48,3 +48,11 @@ asyncio.run(t())
 - OCR 모드 끄고 디지털 PDF로 테스트 (직접 추출이면 즉시 완료)
 - `OCR_USE_MULTIPROCESS=0`으로 멀티프로세싱 비활성화 후 재시도
 - 서버를 `--workers 1`로 실행
+
+## 멀티프로세싱 개선 (4페이지 이상 멈춤 방지)
+
+### 적용된 구조
+1. **submit + as_completed**: `executor.map` 대신 `submit`과 `asyncio.wait(FIRST_COMPLETED)`로 완료되는 페이지부터 즉시 yield
+2. **timeout**: `OCR_TESSERACT_TIMEOUT`(기본 120초)으로 특정 페이지 무한 대기 방지
+3. **이미지 압축 전달**: 메인에서 `cv2.imencode`로 PNG 압축 후 워커에 전달. PDF 반복 열기 I/O·pickle 오버헤드 감소
+4. **stdout/stderr 버퍼**: pytesseract는 각 Tesseract 호출마다 독립 subprocess 사용. `proc.communicate(timeout)`으로 파이프 읽어 버퍼 꼬임 방지

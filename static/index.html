@@ -142,6 +142,7 @@
     var pageViewMode = 'all';
     var cachedDiffHtml = '';
     var cachedCompareData = null;
+    var pageStarted = [];
 
     function formatMMSS(ms) {
       var totalSec = Math.floor(ms / 1000);
@@ -246,7 +247,7 @@
           var m = pageMethods[i] || 'ocr';
           label = getMethodLabel(m);
           title += ': ' + (m === 'direct' ? '직접 추출' : m === 'ocr' ? 'OCR' : '오류');
-        } else if (receivedCount > 0) {
+        } else if (pageStarted[i]) {
           seg.classList.add('segment-working');
           label = '추출중';
           title += ': 추출중';
@@ -265,11 +266,7 @@
     }
 
     function getPagePlaceholder(pageIdx) {
-      var receivedCount = 0;
-      for (var i = 0; i < (totalPages || 0); i++) {
-        if (pageTexts[i] !== undefined) receivedCount++;
-      }
-      return receivedCount > 0 ? '추출중' : '대기중';
+      return pageStarted[pageIdx] ? '추출중' : '대기중';
     }
 
     function updateProgress(page, total, method) {
@@ -288,6 +285,7 @@
       uploadBtn.disabled = true;
       pageTexts = [];
       pageMethods = [];
+      pageStarted = [];
       progressSegments.innerHTML = '';
       progressLabel.textContent = '업로드 중...';
       progressWrap.style.display = 'block';
@@ -398,6 +396,10 @@
                 var curText = pageTexts[currentPage - 1];
                 resultText.textContent = (pageViewMode === 'page' && totalPages > 1) ? (curText !== undefined ? (curText || '') : getPagePlaceholder(currentPage - 1)) : rawExtractedText;
                 resultSection.hidden = false;
+              }
+              if (data.method === 'started' && data.page >= 1) {
+                var pi = data.page - 1;
+                pageStarted[pi] = true;
               }
               if (data.total) totalPages = data.total;
               var method = data.error ? 'error' : (data.method || '');

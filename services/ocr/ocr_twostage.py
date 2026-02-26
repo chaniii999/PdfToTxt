@@ -23,6 +23,7 @@ from services.ocr.eng_ocr_rules import (
 CROP_PADDING = int(os.environ.get("OCR_CROP_PADDING", "8"))
 ENG_ASCII_MIN = float(os.environ.get("OCR_ENG_ASCII_MIN", "0.5"))
 ENG_ROI_MAX = int(os.environ.get("OCR_ENG_ROI_MAX", "20"))  # eng 2차 호출 상한 (3분+ 지연 방지)
+OCR_TESSERACT_TIMEOUT = int(os.environ.get("OCR_TESSERACT_TIMEOUT", "120"))  # 0=무제한
 
 _SYLLABLE = re.compile(r"[\uac00-\ud7a3]")
 _JAMO = re.compile(r"[\u3130-\u318f\u1100-\u11ff]")
@@ -138,7 +139,10 @@ def _ocr_roi_eng(
         pil_crop = Image.fromarray(crop)
         base = re.sub(r"--psm\s+\d+", "", config).strip()
         cfg = get_eng_tesseract_config(base) + " --psm 8"
-        return pytesseract.image_to_string(pil_crop, lang="eng", config=cfg).strip()
+        return pytesseract.image_to_string(
+            pil_crop, lang="eng", config=cfg,
+            timeout=OCR_TESSERACT_TIMEOUT if OCR_TESSERACT_TIMEOUT > 0 else 0,
+        ).strip()
     except Exception:
         return ""
 
@@ -171,13 +175,18 @@ def ocr_page_twostage(
     1차 kor image_to_string → 띄어쓰기 유지.
     image_to_data로 eng 의심후보 bbox만 추출 → 2차 eng → base_text에 순차 치환.
     """
+    _timeout = OCR_TESSERACT_TIMEOUT if OCR_TESSERACT_TIMEOUT > 0 else 0
     try:
-        base_text = pytesseract.image_to_string(pil_img, lang="kor", config=tess_config).strip()
+        base_text = pytesseract.image_to_string(
+            pil_img, lang="kor", config=tess_config, timeout=_timeout,
+        ).strip()
     except Exception:
         return ""
 
     try:
-        data = pytesseract.image_to_data(pil_img, lang="kor", config=tess_config)
+        data = pytesseract.image_to_data(
+            pil_img, lang="kor", config=tess_config, timeout=_timeout,
+        )
     except Exception:
         return base_text
 

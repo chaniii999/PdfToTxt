@@ -1,10 +1,13 @@
 """2-pass OCR: 전체 PSM 6 → 저신뢰/의심 토큰 ROI만 PSM 10/7/8 재시도."""
 
+import os
 import re
 from typing import Any
 
 from PIL import Image
 import pytesseract
+
+OCR_TESSERACT_TIMEOUT = int(os.environ.get("OCR_TESSERACT_TIMEOUT", "120"))  # 0=무제한
 
 # 의/익/폐/페 의심 패턴 (문맥상 이상 시 재시도)
 _SUSPICIOUS_CHARS = re.compile(r"[의익폐페]")
@@ -53,7 +56,10 @@ def _ocr_roi(pil_img: Image.Image, box: tuple[int, int, int, int], psm: int, bas
     crop = pil_img.crop((left, top, left + w, top + h))
     config = f"{base_config} --psm {psm}"
     try:
-        return pytesseract.image_to_string(crop, lang="kor", config=config).strip()
+        return pytesseract.image_to_string(
+            crop, lang="kor", config=config,
+            timeout=OCR_TESSERACT_TIMEOUT if OCR_TESSERACT_TIMEOUT > 0 else 0,
+        ).strip()
     except Exception:
         return ""
 
@@ -64,14 +70,21 @@ def ocr_page_twopass(pil_img: Image.Image, tess_config: str, lang: str = "kor") 
     2차: conf < 70 또는 (의/익/폐/페 포함 + 짧은 토큰) 시 ROI만 PSM 10/8 재시도
     """
     config_psm6 = tess_config
+    _timeout = OCR_TESSERACT_TIMEOUT if OCR_TESSERACT_TIMEOUT > 0 else 0
     try:
-        data = pytesseract.image_to_data(pil_img, lang=lang, config=config_psm6)
+        data = pytesseract.image_to_data(
+            pil_img, lang=lang, config=config_psm6, timeout=_timeout,
+        )
     except Exception:
-        return pytesseract.image_to_string(pil_img, lang=lang, config=config_psm6).strip()
+        return pytesseract.image_to_string(
+            pil_img, lang=lang, config=config_psm6, timeout=_timeout,
+        ).strip()
 
     words = _parse_image_to_data(data)
     if not words:
-        return pytesseract.image_to_string(pil_img, lang=lang, config=config_psm6).strip()
+        return pytesseract.image_to_string(
+            pil_img, lang=lang, config=config_psm6, timeout=_timeout,
+        ).strip()
 
     # block_num, line_num, word_num 순 정렬
     words.sort(key=lambda w: (w["block_num"], w["line_num"], w["word_num"]))
