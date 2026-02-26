@@ -183,6 +183,9 @@ def ocr_page_twostage(
     except Exception:
         return ""
 
+    if not base_text:
+        return base_text
+
     try:
         data = pytesseract.image_to_data(
             pil_img, lang="kor", config=tess_config, timeout=_timeout,

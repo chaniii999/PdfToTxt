@@ -123,6 +123,9 @@ OCR_UPSCALE=1.0      # 1.5→1.0 (가장 효과 큼)
 3. **image_to_data 1회 통합** — kor 텍스트 재구성 로직 필요
 4. DPI·tessdata — 품질/속도 트레이드오프 검토 후 적용
 
-## 6. 적용된 수정 (2026-02-26)
+## 6. 적용된 수정
 
 - `ocr_twostage.py`: `ENG_ROI_MAX=20` 추가. eng 의심후보 20개 초과 시 2차 eng OCR 중단.
+- `preprocess_minimal.py`: `UPSCALE_FACTOR` 기본값 1.5→1.0. 이미지 크기 약 44% 감소. `OCR_UPSCALE=1.5`로 품질 우선 가능.
+- `preprocess_minimal.py`: 업스케일 시 `INTER_LANCZOS4`→`INTER_LINEAR` (속도 우선).
+- `ocr_twostage.py`: `base_text` 비어 있으면 `image_to_data` 스킵 (빈 페이지 1회 Tesseract 절감).
