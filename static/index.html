@@ -323,40 +323,55 @@
       });
     }
 
-    function levenshtein(s1, s2) {
-      if (s1.length < s2.length) return levenshtein(s2, s1);
-      if (s2.length === 0) return s1.length;
-      var prev = [];
-      for (var j = 0; j <= s2.length; j++) prev[j] = j;
-      for (var i = 0; i < s1.length; i++) {
-        var curr = [i + 1];
-        for (var j = 0; j < s2.length; j++) {
-          curr.push(Math.min(
-            prev[j + 1] + 1,
-            curr[j] + 1,
-            prev[j] + (s1[i] === s2[j] ? 0 : 1)
-          ));
+    function isKoreanChar(c) {
+      return c && /[\uac00-\ud7a3\u1100-\u11ff\u3130-\u318f]/.test(c);
+    }
+
+    function isEnglishOrDigitChar(c) {
+      return c && /[a-zA-Z0-9]/.test(c);
+    }
+
+    function accuracyByType(ops) {
+      var krGt = 0, krOk = 0, krWrong = 0;
+      var enGt = 0, enOk = 0, enWrong = 0;
+      for (var idx = 0; idx < ops.length; idx++) {
+        var op = ops[idx], gt = op.gt, ocr = op.ocr;
+        if (op.type === 'm') {
+          if (isKoreanChar(gt)) { krGt++; krOk++; }
+          else if (isEnglishOrDigitChar(gt)) { enGt++; enOk++; }
+        } else if (op.type === 's' || op.type === 'd') {
+          if (isKoreanChar(gt)) { krGt++; krWrong++; }
+          else if (isEnglishOrDigitChar(gt)) { enGt++; enWrong++; }
+        } else if (op.type === 'i') {
+          var nextGt = '';
+          for (var j = idx + 1; j < ops.length; j++) {
+            if (ops[j].gt && (ops[j].type === 'm' || ops[j].type === 's' || ops[j].type === 'd')) {
+              nextGt = ops[j].gt;
+              break;
+            }
+          }
+          if (!nextGt) {
+            for (var k = idx - 1; k >= 0; k--) {
+              if (ops[k].gt && (ops[k].type === 'm' || ops[k].type === 's' || ops[k].type === 'd')) {
+                nextGt = ops[k].gt;
+                break;
+              }
+            }
+          }
+          if (isKoreanChar(ocr)) {
+            if (isEnglishOrDigitChar(nextGt)) { enGt++; enWrong++; }
+            else { krGt++; krWrong++; }
+          } else if (isEnglishOrDigitChar(ocr)) {
+            if (isKoreanChar(nextGt)) { krGt++; krWrong++; }
+            else { enGt++; enWrong++; }
+          }
         }
-        prev = curr;
       }
-      return prev[s2.length];
-    }
-
-    function extractKorean(text) {
-      return text.match(/[\uac00-\ud7a3\u1100-\u11ff\u3130-\u318f]/g) || [];
-    }
-
-    function extractEnglish(text) {
-      return text.match(/[a-zA-Z]/g) || [];
-    }
-
-    function accuracyPercent(gt, ocr) {
-      if (gt.length === 0) return { pct: 100, correct: 0, wrong: 0 };
-      var edits = levenshtein(gt, ocr);
-      var correct = Math.max(0, gt.length - edits);
-      var wrong = gt.length - correct;
-      var pct = Math.round(correct / gt.length * 1000) / 10;
-      return { pct: pct, correct: correct, wrong: wrong };
+      function acc(gtCount, ok, wrongCount) {
+        if (gtCount === 0) return { pct: null, correct: 0, wrong: 0, gtCount: 0 };
+        return { pct: Math.round(ok / gtCount * 1000) / 10, correct: ok, wrong: wrongCount, gtCount: gtCount };
+      }
+      return { korean: acc(krGt, krOk, krWrong), english: acc(enGt, enOk, enWrong) };
     }
 
     function escapeHtml(s) {
@@ -447,10 +462,10 @@
         return;
       }
 
-      var gtKr = extractKorean(original).join('');
-      var ocrKr = extractKorean(extracted).join('');
-      var gtEn = extractEnglish(original).join('');
-      var ocrEn = extractEnglish(extracted).join('');
+      var ops = computeDiffOps(original, extracted);
+      var rates = accuracyByType(ops);
+      var kr = rates.korean;
+      var en = rates.english;
 
       var accEl = document.getElementById('accuracyResult');
       accEl.hidden = false;
@@ -458,18 +473,16 @@
 
       var lines = [];
       var accLines = [];
-      if (gtKr.length > 0) {
-        var kr = accuracyPercent(gtKr, ocrKr);
-        lines.push('<div class="row">한글: ' + kr.pct + '% (맞음 ' + kr.correct + '자 / 틀림 ' + kr.wrong + '자 / 원본 ' + gtKr.length + '자)</div>');
-        accLines.push('한글: ' + kr.pct + '% (맞음 ' + kr.correct + '자 / 틀림 ' + kr.wrong + '자 / 원본 ' + gtKr.length + '자)');
+      if (kr.gtCount > 0) {
+        lines.push('<div class="row">한글: ' + kr.pct + '% (맞음 ' + kr.correct + '자 / 틀림 ' + kr.wrong + '자 / 원본 ' + kr.gtCount + '자)</div>');
+        accLines.push('한글: ' + kr.pct + '% (맞음 ' + kr.correct + '자 / 틀림 ' + kr.wrong + '자 / 원본 ' + kr.gtCount + '자)');
       } else {
         lines.push('<div class="row">한글: 원본에 한글 없음 (N/A)</div>');
         accLines.push('한글: 원본에 한글 없음 (N/A)');
       }
-      if (gtEn.length > 0) {
-        var en = accuracyPercent(gtEn, ocrEn);
-        lines.push('<div class="row">영어: ' + en.pct + '% (맞음 ' + en.correct + '자 / 틀림 ' + en.wrong + '자 / 원본 ' + gtEn.length + '자)</div>');
-        accLines.push('영어: ' + en.pct + '% (맞음 ' + en.correct + '자 / 틀림 ' + en.wrong + '자 / 원본 ' + gtEn.length + '자)');
+      if (en.gtCount > 0) {
+        lines.push('<div class="row">영어: ' + en.pct + '% (맞음 ' + en.correct + '자 / 틀림 ' + en.wrong + '자 / 원본 ' + en.gtCount + '자)</div>');
+        accLines.push('영어: ' + en.pct + '% (맞음 ' + en.correct + '자 / 틀림 ' + en.wrong + '자 / 원본 ' + en.gtCount + '자)');
       } else {
         lines.push('<div class="row">영어: 원본에 영어 없음 (N/A)</div>');
         accLines.push('영어: 원본에 영어 없음 (N/A)');
