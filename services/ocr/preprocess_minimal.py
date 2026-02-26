@@ -1,14 +1,30 @@
-"""한글 문서 특화 최소 전처리: Grayscale, Deskew, Otsu, 획 구분 강화, 10px 테두리."""
+"""최소 전처리: Grayscale → CLAHE → Sharpen(획 구분) → Otsu → Morphology(끊긴 획) → 10px 테두리.
+
+자모 혼동 완화: ㅇ/ㅁ(성↔섬, 많↔않), ㅔ/ㅖ(페↔폐), ㅡ+ㅣ/ㅣ+ㄱ(의↔익).
+"""
 
 import cv2
 import numpy as np
 
-DESKEW_MIN_ANGLE = 0.5  # 0.5도 이상일 때만 deskew 실행
-BORDER_PX = 10  # Tesseract 권장 흰 테두리
+BORDER_PX = 10
+SHARPEN_STRENGTH = 0.55  # ㅇ/ㅁ, ㅔ/ㅖ 등 자모 경계 선명화 강화
+CLIP_LIMIT = 2.5  # CLAHE. 얇은 획(ㅖ 가로선 등) 보존
 
 
-def _sharpen_strokes(gray: np.ndarray, strength: float = 0.4) -> np.ndarray:
-    """한글 자모 경계 선명화. ㅇ/ㅁ, ㅈ/ㅅ 등 획 구분 개선."""
+def to_grayscale(img: np.ndarray) -> np.ndarray:
+    if len(img.shape) == 2:
+        return img
+    return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+
+def _clahe_contrast(gray: np.ndarray, clip_limit: float = CLIP_LIMIT, grid_size: int = 8) -> np.ndarray:
+    """저대비 영역 대비 향상. 얇은 획(ㅖ 가로선 등)·자모 경계 가독성 개선."""
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(grid_size, grid_size))
+    return clahe.apply(gray)
+
+
+def _sharpen_strokes(gray: np.ndarray, strength: float = SHARPEN_STRENGTH) -> np.ndarray:
+    """한글 자모 경계 선명화. ㅇ/ㅁ, ㅈ/ㅅ, ㅓ/ㅣ 등 획 구분 개선."""
     kernel = np.array([
         [0, -1, 0],
         [-1, 5, -1],
@@ -24,21 +40,12 @@ def _morphology_connect_strokes(binary: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 
-def to_grayscale(img: np.ndarray) -> np.ndarray:
-    """RGB → Grayscale."""
-    if len(img.shape) == 2:
-        return img
-    return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-
-
 def otsu_binarize(gray: np.ndarray) -> np.ndarray:
-    """Otsu threshold 이진화."""
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return binary
 
 
 def add_ocr_border(img: np.ndarray, border_px: int = BORDER_PX, color: int = 255) -> np.ndarray:
-    """Tesseract 권장 10px 흰 테두리."""
     if len(img.shape) == 3:
         value = (color, color, color)
     else:
@@ -49,48 +56,11 @@ def add_ocr_border(img: np.ndarray, border_px: int = BORDER_PX, color: int = 255
     )
 
 
-def hough_deskew(gray: np.ndarray, max_angle: float = 15.0) -> tuple[np.ndarray, float]:
-    """Hough 변환으로 텍스트 라인 각도 추정. (보정 이미지, 각도) 반환."""
-    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=50, maxLineGap=10)
-
-    if lines is None or len(lines) == 0:
-        return gray, 0.0
-
-    angles = []
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
-        dx = x2 - x1
-        dy = y2 - y1
-        if abs(dx) < 5:
-            continue
-        angle = np.degrees(np.arctan2(dy, dx))
-        if abs(angle) <= max_angle:
-            angles.append(angle)
-
-    if not angles:
-        return gray, 0.0
-
-    median_angle = float(np.median(angles))
-    if abs(median_angle) < DESKEW_MIN_ANGLE:
-        return gray, 0.0
-
-    h, w = gray.shape[:2]
-    center = (w // 2, h // 2)
-    matrix = cv2.getRotationMatrix2D(center, median_angle, 1.0)
-    rotated = cv2.warpAffine(
-        gray, matrix, (w, h),
-        flags=cv2.INTER_CUBIC,
-        borderMode=cv2.BORDER_REPLICATE,
-    )
-    return rotated, round(median_angle, 2)
-
-
 def preprocess_minimal(rgb: np.ndarray) -> np.ndarray:
-    """전처리: Grayscale → Sharpen → Deskew → Otsu → Morphology → 10px 테두리."""
+    """Grayscale → CLAHE → Sharpen → Otsu → Morphology → 10px 테두리."""
     gray = to_grayscale(rgb)
-    sharpened = _sharpen_strokes(gray)
-    deskewed, _ = hough_deskew(sharpened)
-    binary = otsu_binarize(deskewed)
+    contrasted = _clahe_contrast(gray)
+    sharpened = _sharpen_strokes(contrasted)
+    binary = otsu_binarize(sharpened)
     connected = _morphology_connect_strokes(binary)
     return add_ocr_border(connected)
